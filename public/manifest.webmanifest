@@ -1,0 +1,17 @@
+{
+  "name": "Open Web 3D Capture",
+  "short_name": "3D Capture",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "description": "A local-first WebXR capture diagnostic for 3D reconstruction datasets",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
