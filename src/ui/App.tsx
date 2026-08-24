@@ -41,6 +41,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.lastCaptureId]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle("xr-active-root", snapshot.running);
+    return () => document.documentElement.classList.remove("xr-active-root");
+  }, [snapshot.running]);
+
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError(undefined);
@@ -70,7 +75,7 @@ export function App() {
   }
 
   return (
-    <main>
+    <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
         <p className="eyebrow">M1 basic recorder</p>
         <h1>Open Web 3D Capture</h1>
@@ -80,6 +85,8 @@ export function App() {
       {error || snapshot.lastError ? (
         <div className="error" role="alert">{error ?? snapshot.lastError}</div>
       ) : null}
+
+      {snapshot.running ? <div className="reticle" aria-hidden="true" /> : null}
 
       <section className="capture-panel" aria-label="Capture controls">
         <div className="capture-status">
@@ -104,34 +111,51 @@ export function App() {
               : "Start XR on the Android phone before recording."}
         </p>
         <div className="actions">
-          <button
-            disabled={Boolean(busy) || snapshot.running}
-            onClick={() => void run("starting XR", () => controller.start())}
-          >
-            Start XR
-          </button>
-          <button
-            className="primary"
-            disabled={Boolean(busy) || !snapshot.running || Boolean(snapshot.captureId)}
-            onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
-          >
-            Start capture
-          </button>
-          <button
-            className="danger"
-            disabled={Boolean(busy) || !snapshot.captureId}
-            onClick={() => void run("saving capture", () => controller.stopCapture())}
-          >
-            Stop and save
-          </button>
-          <button
-            disabled={Boolean(busy) || Boolean(snapshot.captureId) || !snapshot.lastCaptureId}
-            onClick={() => void run("exporting ZIP", () => downloadCapture())}
-          >
-            Export latest
-          </button>
+          {!snapshot.running ? (
+            <button
+              className="primary"
+              disabled={Boolean(busy)}
+              onClick={() => void run("starting XR", () => controller.start())}
+            >
+              Start XR
+            </button>
+          ) : null}
+          {snapshot.running && !snapshot.captureId ? (
+            <button
+              className="primary"
+              disabled={Boolean(busy)}
+              onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
+            >
+              Start capture
+            </button>
+          ) : null}
+          {snapshot.captureId ? (
+            <button
+              className="danger"
+              disabled={Boolean(busy)}
+              onClick={() => void run("saving capture", () => controller.stopCapture())}
+            >
+              Stop and save
+            </button>
+          ) : null}
+          {!snapshot.captureId && snapshot.lastCaptureId ? (
+            <button
+              disabled={Boolean(busy)}
+              onClick={() => void run("exporting ZIP", () => downloadCapture())}
+            >
+              Export latest
+            </button>
+          ) : null}
+          {snapshot.running ? (
+            <button
+              disabled={Boolean(busy)}
+              onClick={() => void run("stopping XR", () => controller.stop())}
+            >
+              End XR
+            </button>
+          ) : null}
         </div>
-        <details>
+        <details className="diagnostic-controls">
           <summary>Diagnostic controls</summary>
           <div className="actions diagnostic-actions">
             <button
@@ -146,19 +170,13 @@ export function App() {
             >
               Enable camera fallback
             </button>
-            <button
-              disabled={Boolean(busy) || !snapshot.running}
-              onClick={() => void run("stopping XR", () => controller.stop())}
-            >
-              End XR session
-            </button>
           </div>
         </details>
       </section>
 
       {busy ? <p className="busy" aria-live="polite">{busy}</p> : null}
 
-      <section>
+      <section className="debug-section">
         <div className="section-heading">
           <h2>Capabilities</h2>
           <span className="storage">storage: {store.kind}</span>
@@ -166,7 +184,7 @@ export function App() {
         <CapabilityGrid report={snapshot.capabilities} />
       </section>
 
-      <section>
+      <section className="debug-section">
         <h2>Live XR telemetry</h2>
         <dl className="telemetry">
           <Metric label="session" value={snapshot.running ? "running" : "stopped"} />
@@ -197,7 +215,7 @@ export function App() {
         </div>
       </section>
 
-      <section>
+      <section className="debug-section">
         <div className="section-heading">
           <h2>Local captures</h2>
           <button disabled={Boolean(busy)} onClick={() => void run("refreshing captures", refreshCaptures)}>

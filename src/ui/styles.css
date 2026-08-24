@@ -5,6 +5,10 @@
   font-synthesis: none;
 }
 
+:root.xr-active-root,
+:root.xr-active-root body,
+:root.xr-active-root #root { background: transparent; }
+
 * { box-sizing: border-box; }
 
 body { margin: 0; min-width: 320px; min-height: 100vh; }
@@ -50,6 +54,91 @@ section {
 details { margin-top: 1rem; border-top: 1px solid #334155; padding-top: 0.8rem; }
 summary { color: #94a3b8; cursor: pointer; }
 .diagnostic-actions { margin-top: 0.8rem; }
+.reticle { display: none; }
+
+main.xr-active {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+}
+
+main.xr-active header,
+main.xr-active .debug-section,
+main.xr-active .diagnostic-controls { display: none; }
+
+main.xr-active .reticle {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  display: block;
+  width: 3.5rem;
+  height: 3.5rem;
+  border: 2px solid rgb(255 255 255 / 72%);
+  border-radius: 50%;
+  translate: -50% -50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 35%);
+}
+
+main.xr-active .reticle::before,
+main.xr-active .reticle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: "";
+  background: rgb(255 255 255 / 80%);
+  translate: -50% -50%;
+}
+
+main.xr-active .reticle::before { width: 1rem; height: 1px; }
+main.xr-active .reticle::after { width: 1px; height: 1rem; }
+
+main.xr-active .capture-panel {
+  position: fixed;
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 2;
+  margin: 0 auto;
+  width: min(42rem, calc(100% - 1.5rem));
+  padding: 0.75rem;
+  border-color: rgb(125 211 252 / 50%);
+  background: rgb(2 6 23 / 72%);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+main.xr-active .capture-status { grid-template-columns: repeat(3, 1fr); }
+main.xr-active .capture-status > div { padding: 0.45rem 0.6rem; background: rgb(2 6 23 / 55%); }
+main.xr-active .capture-status strong { font-size: 1.2rem; }
+main.xr-active .capture-instruction { min-height: 0; margin: 0.6rem 0; font-size: 0.85rem; }
+main.xr-active .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
+main.xr-active .actions button { min-height: 3rem; }
+main.xr-active .error {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.75rem;
+  left: 0.75rem;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+main.xr-active .busy {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 3;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: rgb(2 6 23 / 78%);
+  translate: -50% 0;
+}
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .storage, .busy { color: #7dd3fc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .busy { margin: 0.75rem 0 0; }
@@ -79,5 +168,8 @@ code { display: block; overflow-x: auto; white-space: pre; color: #bae6fd; font-
   main { padding-top: 1.25rem; }
   .actions button { flex: 1 1 100%; }
   .capture-status { grid-template-columns: 1fr; }
+  main.xr-active .capture-status { grid-template-columns: repeat(3, 1fr); }
+  main.xr-active .capture-status span { font-size: 0.55rem; }
+  main.xr-active .actions button { flex: initial; }
   .capture-list li { align-items: stretch; flex-direction: column; }
 }
