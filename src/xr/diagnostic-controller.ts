@@ -1,11 +1,11 @@
 import { exportDatasetZip } from "../dataset/zip";
+import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
 import type {
   CaptureDataset,
   CaptureFrame,
   CapabilityReport,
   CaptureMetadata,
-  IMUSample,
   Intrinsics,
   Matrix4,
 } from "../shared/types";
@@ -30,11 +30,13 @@ interface XRWebGLBindingLike {
 
 interface ActiveCapture {
   id: string;
-  target: number;
-  nextAt: number;
+  target?: number;
   frames: number;
   metadata: CaptureMetadata;
+  gate: TemporalKeyframeGate;
+  imuStartIndex: number;
   inFlight: boolean;
+  stopping: boolean;
   pendingWrite?: Promise<void>;
 }
 
@@ -53,7 +55,8 @@ export interface DiagnosticSnapshot {
   imuSampleRate: number;
   imuStatus: string;
   captureId?: string;
-  captureProgress: { current: number; target: number };
+  captureMode?: "diagnostic" | "object";
+  captureProgress: { current: number; target?: number };
   lastCaptureId?: string;
   lastImageStatus: string;
   lastError?: string;
@@ -72,7 +75,7 @@ export class XRDiagnosticController {
     trackingState: "not running",
     imuSampleRate: 0,
     imuStatus: "not started",
-    captureProgress: { current: 0, target: 20 },
+    captureProgress: { current: 0 },
     lastImageStatus: "not attempted",
   };
   private session?: XRSession;
@@ -86,7 +89,6 @@ export class XRDiagnosticController {
   private frameTimes: number[] = [];
   private activeCapture?: ActiveCapture;
   private lastCaptureId?: string;
-  private lastImuSamples: IMUSample[] = [];
   private rawVideo?: HTMLVideoElement;
   private rawStream?: MediaStream;
   private disposed = false;
@@ -203,8 +205,26 @@ export class XRDiagnosticController {
   }
 
   async captureFrames(target = 20): Promise<void> {
+    if (!Number.isInteger(target) || target < 1) throw new Error("Frame target must be a positive integer");
+    await this.beginCapture("diagnostic", target);
+  }
+
+  async startBasicCapture(): Promise<void> {
+    await this.beginCapture("object");
+  }
+
+  async stopCapture(): Promise<void> {
+    const active = this.activeCapture;
+    if (!active) throw new Error("No capture is running");
+    active.stopping = true;
+    await active.pendingWrite;
+    if (this.activeCapture !== active) return;
+    await this.finalizeActiveCapture(active, "complete");
+  }
+
+  private async beginCapture(captureMode: "diagnostic" | "object", target?: number): Promise<void> {
     if (!this.session || !this.snapshot.running) throw new Error("Start XR before capturing");
-    if (this.activeCapture) throw new Error("A diagnostic capture is already running");
+    if (this.activeCapture) throw new Error("A capture is already running");
 
     const now = new Date().toISOString();
     const metadata: CaptureMetadata = {
@@ -213,7 +233,7 @@ export class XRDiagnosticController {
       captureId: makeCaptureId(),
       createdAt: now,
       updatedAt: now,
-      captureMode: "diagnostic",
+      captureMode,
       source: "webxr",
       units: "meters",
       frameCount: 0,
@@ -225,12 +245,15 @@ export class XRDiagnosticController {
     this.activeCapture = {
       id: metadata.captureId,
       target,
-      nextAt: performance.now(),
       frames: 0,
       metadata,
+      gate: new TemporalKeyframeGate(4),
+      imuStartIndex: this.imu.getSampleCount(),
       inFlight: false,
+      stopping: false,
     };
     this.snapshot.captureId = metadata.captureId;
+    this.snapshot.captureMode = captureMode;
     this.snapshot.captureProgress = { current: 0, target };
     this.snapshot.lastError = undefined;
     this.emit();
@@ -308,9 +331,15 @@ export class XRDiagnosticController {
     this.snapshot.trackingState = pose.emulatedPosition ? "emulated" : "tracked";
 
     const active = this.activeCapture;
-    if (active && !active.inFlight && active.frames < active.target && time >= active.nextAt) {
+    const belowTarget = active?.target === undefined || active.frames < active.target;
+    if (
+      active &&
+      !active.stopping &&
+      !active.inFlight &&
+      belowTarget &&
+      active.gate.tryAccept(time)
+    ) {
       active.inFlight = true;
-      active.nextAt = time + 200;
       const write = this.persistFrame({
         timestamp: time,
         cameraToWorld,
@@ -369,8 +398,7 @@ export class XRDiagnosticController {
       imageSource: image?.source,
       imageSynchronized: image?.source === "xr-camera",
       quality: {
-        // M0 records synchronized telemetry only. Quality values are reserved
-        // for the deterministic scoring pipeline in the next milestone.
+        // M1 uses only a temporal gate. Deterministic quality values arrive in M2.
         blurScore: 0,
         motionScore: 0,
         noveltyScore: 0,
@@ -400,21 +428,9 @@ export class XRDiagnosticController {
         ? "raw camera fallback produced no frame"
         : "XR camera image unavailable; pose retained";
 
-    if (active.frames >= active.target) {
-      this.lastImuSamples = this.imu.getSamples();
-      await this.persistence.appendImu(active.id, this.lastImuSamples);
-      const completed: CaptureMetadata = {
-        ...active.metadata,
-        frameCount: active.frames,
-        hasImu: this.lastImuSamples.length > 0,
-        status: "complete",
-        updatedAt: new Date().toISOString(),
-      };
-      await this.persistence.finalizeCapture(active.id, completed);
-      this.lastCaptureId = active.id;
-      this.snapshot.lastCaptureId = active.id;
-      this.snapshot.captureId = undefined;
-      this.activeCapture = undefined;
+    if (active.target !== undefined && active.frames >= active.target) {
+      active.stopping = true;
+      await this.finalizeActiveCapture(active, "complete");
     }
     this.emit();
   }
@@ -584,20 +600,26 @@ export class XRDiagnosticController {
   };
 
   private async finalizeInterruptedCapture(active: ActiveCapture): Promise<void> {
+    active.stopping = true;
     await active.pendingWrite;
     if (this.activeCapture !== active) return;
-    const samples = this.imu.getSamples();
+    await this.finalizeActiveCapture(active, "incomplete");
+  }
+
+  private async finalizeActiveCapture(active: ActiveCapture, status: "complete" | "incomplete"): Promise<void> {
+    const samples = this.imu.getSamples(active.imuStartIndex);
     await this.persistence.appendImu(active.id, samples);
     await this.persistence.finalizeCapture(active.id, {
       ...active.metadata,
       frameCount: active.frames,
       hasImu: samples.length > 0,
-      status: "incomplete",
+      status,
       updatedAt: new Date().toISOString(),
     });
     this.lastCaptureId = active.id;
     this.snapshot.lastCaptureId = active.id;
     this.snapshot.captureId = undefined;
+    this.snapshot.captureMode = undefined;
     this.activeCapture = undefined;
     this.emit();
   }

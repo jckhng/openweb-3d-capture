@@ -72,47 +72,88 @@ export function App() {
   return (
     <main>
       <header>
-        <p className="eyebrow">M0 capability probe</p>
+        <p className="eyebrow">M1 basic recorder</p>
         <h1>Open Web 3D Capture</h1>
-        <p className="lede">Inspect Android Chrome capture APIs before reconstruction work begins.</p>
+        <p className="lede">Record a durable, reconstruction-ready WebXR image and pose sequence.</p>
       </header>
 
       {error || snapshot.lastError ? (
         <div className="error" role="alert">{error ?? snapshot.lastError}</div>
       ) : null}
 
-      <section className="actions" aria-label="Diagnostic controls">
-        <button
-          className="primary"
-          disabled={Boolean(busy) || snapshot.running}
-          onClick={() => void run("starting XR", () => controller.start())}
-        >
-          Start XR
-        </button>
-        <button
-          disabled={Boolean(busy)}
-          onClick={() => void run("enabling fallback camera", () => controller.enableRawCamera())}
-        >
-          Enable camera fallback
-        </button>
-        <button
-          disabled={Boolean(busy) || !snapshot.running || Boolean(snapshot.captureId)}
-          onClick={() => void run("starting capture", () => controller.captureFrames(20))}
-        >
-          Capture 20 frames
-        </button>
-        <button
-          disabled={Boolean(busy) || (!snapshot.lastCaptureId && !snapshot.captureId)}
-          onClick={() => void run("exporting ZIP", () => downloadCapture())}
-        >
-          Export diagnostics
-        </button>
-        <button
-          disabled={Boolean(busy) || !snapshot.running}
-          onClick={() => void run("stopping XR", () => controller.stop())}
-        >
-          Stop XR
-        </button>
+      <section className="capture-panel" aria-label="Capture controls">
+        <div className="capture-status">
+          <div>
+            <span>accepted frames</span>
+            <strong>{snapshot.captureProgress.current}</strong>
+          </div>
+          <div>
+            <span>capture state</span>
+            <strong>{snapshot.captureId ? "recording" : "idle"}</strong>
+          </div>
+          <div>
+            <span>minimum target</span>
+            <strong className={snapshot.captureProgress.current >= 50 ? "available" : undefined}>50</strong>
+          </div>
+        </div>
+        <p className="capture-instruction">
+          {snapshot.captureId
+            ? "Move slowly around the object. Include low, level, and elevated views. Stop after 50–100 frames."
+            : snapshot.running
+              ? "XR is ready. Center the object, then start the basic capture."
+              : "Start XR on the Android phone before recording."}
+        </p>
+        <div className="actions">
+          <button
+            disabled={Boolean(busy) || snapshot.running}
+            onClick={() => void run("starting XR", () => controller.start())}
+          >
+            Start XR
+          </button>
+          <button
+            className="primary"
+            disabled={Boolean(busy) || !snapshot.running || Boolean(snapshot.captureId)}
+            onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
+          >
+            Start capture
+          </button>
+          <button
+            className="danger"
+            disabled={Boolean(busy) || !snapshot.captureId}
+            onClick={() => void run("saving capture", () => controller.stopCapture())}
+          >
+            Stop and save
+          </button>
+          <button
+            disabled={Boolean(busy) || Boolean(snapshot.captureId) || !snapshot.lastCaptureId}
+            onClick={() => void run("exporting ZIP", () => downloadCapture())}
+          >
+            Export latest
+          </button>
+        </div>
+        <details>
+          <summary>Diagnostic controls</summary>
+          <div className="actions diagnostic-actions">
+            <button
+              disabled={Boolean(busy) || !snapshot.running || Boolean(snapshot.captureId)}
+              onClick={() => void run("starting diagnostic capture", () => controller.captureFrames(20))}
+            >
+              Capture 20 frames
+            </button>
+            <button
+              disabled={Boolean(busy) || Boolean(snapshot.captureId)}
+              onClick={() => void run("enabling fallback camera", () => controller.enableRawCamera())}
+            >
+              Enable camera fallback
+            </button>
+            <button
+              disabled={Boolean(busy) || !snapshot.running}
+              onClick={() => void run("stopping XR", () => controller.stop())}
+            >
+              End XR session
+            </button>
+          </div>
+        </details>
       </section>
 
       {busy ? <p className="busy" aria-live="polite">{busy}</p> : null}
@@ -138,9 +179,12 @@ export function App() {
           <Metric label="IMU samples/sec" value={snapshot.imuSampleRate.toFixed(1)} />
           <Metric label="IMU" value={snapshot.imuStatus} />
           <Metric label="image" value={snapshot.lastImageStatus} />
+          <Metric label="capture mode" value={snapshot.captureMode ?? "none"} />
           <Metric
             label="capture"
-            value={`${snapshot.captureProgress.current} / ${snapshot.captureProgress.target}`}
+            value={snapshot.captureProgress.target
+              ? `${snapshot.captureProgress.current} / ${snapshot.captureProgress.target}`
+              : `${snapshot.captureProgress.current} frames`}
           />
         </dl>
         <div className="matrix-grid">
@@ -166,7 +210,7 @@ export function App() {
               <li key={capture.captureId}>
                 <div>
                   <strong>{capture.captureId}</strong>
-                  <span>{capture.frameCount} frames · {capture.status} · {capture.createdAt}</span>
+                  <span>{capture.frameCount} frames · {capture.captureMode} · {capture.status} · {capture.createdAt}</span>
                 </div>
                 <button
                   disabled={Boolean(busy)}

@@ -1,5 +1,18 @@
 # M0 API compatibility
 
+## Target-phone result — 24 August 2026
+
+M0 passed on the tested Android/ARCore phone:
+
+- 20 of 20 valid, correctly oriented, synchronized XR camera JPEGs at 886×1920;
+- 20 of 20 tracked, finite camera-to-world poses with plausible motion;
+- stable intrinsics (`fx` 1246.76, `fy` 1246.97, `cx` 443, `cy` 960);
+- 20 CPU depth buffers at 160×90 in `luminance-alpha` format;
+- 823 IMU samples at approximately 56 Hz;
+- complete ZIP export after page reload, confirming OPFS persistence.
+
+The remaining coordinate-convention check belongs to Gate 1: produce a recognizable reconstruction from an M1 dataset.
+
 ## Capability results
 
 The initial probe reports API surface availability, not permission or per-session feature grants. `immersive-ar` is the only result backed by `navigator.xr.isSessionSupported()`.

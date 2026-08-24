@@ -46,8 +46,12 @@ export class IMUSensorRecorder {
     this.listener = undefined;
   }
 
-  getSamples(): IMUSample[] {
-    return this.samples.map((sample) => ({
+  getSampleCount(): number {
+    return this.samples.length;
+  }
+
+  getSamples(fromIndex = 0): IMUSample[] {
+    return this.samples.slice(Math.max(0, fromIndex)).map((sample) => ({
       ...sample,
       gyro: sample.gyro ? [...sample.gyro] as [number, number, number] : undefined,
       accel: sample.accel ? [...sample.accel] as [number, number, number] : undefined,
@@ -79,4 +83,3 @@ export class IMUSensorRecorder {
     }
   }
 }
-

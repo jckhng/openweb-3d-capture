@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 24 August 2026
 
-Milestone 0 is implemented as a buildable scaffold but is not yet accepted on hardware.
+Milestone 0 is accepted on the target phone. Milestone 1 basic recording is implemented and awaits its reconstruction test.
 
 Implemented:
 
@@ -15,28 +15,40 @@ Implemented:
 * local capture listing and export after reload
 * matrix and dataset serialization unit tests
 * secure-origin and experimental-API documentation
+* open-ended M1 object recorder with explicit start/stop
+* four-FPS temporal keyframe gate separated from XR/UI code
+* capture-window IMU export
+* network-first production service worker with offline fallback
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (7 tests)
+npm test        PASS (10 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
-Required before declaring M0 complete:
+M0 hardware evidence:
 
-1. Run the diagnostic on the target Android/ARCore phone from a trustworthy origin.
-2. Confirm `camera-access` is granted and exported JPEGs are non-blank, correctly oriented, and pose-synchronized.
-3. Confirm intrinsics, pose timestamps, optional depth, IMU, and OPFS reload survival from an exported ZIP.
-4. Record the exact phone, Android version, Chrome version, enabled flags, resolutions, frame rates, and failures in `docs/m0-compatibility.md`.
+* 20 synchronized 886×1920 XR camera JPEGs
+* tracked, changing, finite poses and stable intrinsics
+* 20 valid 160×90 CPU depth buffers
+* IMU telemetry at approximately 56 Hz
+* complete export after page reload from OPFS
+
+Required before declaring M1 complete:
+
+1. Deploy the M1 recorder and capture 50–100 frames around a static object.
+2. Verify the export contains synchronized images, monotonic poses, capture-window IMU, and optional depth.
+3. Produce a recognizable reconstruction in Brush or another Nerfstudio-compatible path.
+4. Confirm or correct coordinate handedness and orientation from that reconstruction.
 
 Plan constraints clarified by implementation:
 
 * API-surface detection is not proof of a granted WebXR feature; the live session is authoritative.
 * `getUserMedia()` frames are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. They remain a diagnostic fallback and are marked as unsynchronized in telemetry.
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
-* Do not begin M1 quality or guidance work until the target-phone ZIP passes M0 acceptance.
+* Do not begin M2 quality scoring until the M1 reconstruction gate passes.
 
 ## 1. Objective
 

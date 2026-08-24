@@ -1,6 +1,7 @@
 node_modules
 dist
 coverage
+results/
 .DS_Store
 
 .vercel

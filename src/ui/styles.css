@@ -22,6 +22,7 @@ button {
 button:disabled { cursor: not-allowed; opacity: 0.42; }
 button:not(:disabled) { cursor: pointer; }
 button.primary { color: #082f49; background: #38bdf8; border-color: #38bdf8; }
+button.danger { color: #fff1f2; background: #9f1239; border-color: #be123c; }
 
 main { width: min(72rem, 100%); margin: 0 auto; padding: 2rem 1rem 5rem; }
 header { margin-bottom: 1.5rem; }
@@ -40,6 +41,15 @@ section {
 }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.capture-panel { border-color: #075985; background: linear-gradient(150deg, #111827 30%, #082f49); }
+.capture-status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; }
+.capture-status > div { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.55rem; background: rgb(7 12 20 / 72%); }
+.capture-status span { color: #94a3b8; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.capture-status strong { font-size: clamp(1.15rem, 5vw, 2rem); }
+.capture-instruction { min-height: 2.8rem; color: #e0f2fe; line-height: 1.45; }
+details { margin-top: 1rem; border-top: 1px solid #334155; padding-top: 0.8rem; }
+summary { color: #94a3b8; cursor: pointer; }
+.diagnostic-actions { margin-top: 0.8rem; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .storage, .busy { color: #7dd3fc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .busy { margin: 0.75rem 0 0; }
@@ -68,5 +78,6 @@ code { display: block; overflow-x: auto; white-space: pre; color: #bae6fd; font-
 @media (max-width: 520px) {
   main { padding-top: 1.25rem; }
   .actions button { flex: 1 1 100%; }
+  .capture-status { grid-template-columns: 1fr; }
   .capture-list li { align-items: stretch; flex-direction: column; }
 }
