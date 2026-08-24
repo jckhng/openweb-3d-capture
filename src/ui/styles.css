@@ -97,6 +97,8 @@ main.xr-active .reticle::after {
 
 main.xr-active .reticle::before { width: 1rem; height: 1px; }
 main.xr-active .reticle::after { width: 1px; height: 1rem; }
+main.xr-active .reticle.quality-good { border-color: #86efac; box-shadow: 0 0 0 1px rgb(0 0 0 / 35%), 0 0 1rem rgb(134 239 172 / 35%); }
+main.xr-active .reticle.quality-warning { border-color: #fbbf24; box-shadow: 0 0 0 1px rgb(0 0 0 / 35%), 0 0 1rem rgb(251 191 36 / 40%); }
 
 main.xr-active .capture-panel {
   position: fixed;
@@ -117,6 +119,8 @@ main.xr-active .capture-status { grid-template-columns: repeat(3, 1fr); }
 main.xr-active .capture-status > div { padding: 0.45rem 0.6rem; background: rgb(2 6 23 / 55%); }
 main.xr-active .capture-status strong { font-size: 1.2rem; }
 main.xr-active .capture-instruction { min-height: 0; margin: 0.6rem 0; font-size: 0.85rem; }
+main.xr-active .capture-instruction.quality-good { color: #bbf7d0; }
+main.xr-active .capture-instruction.quality-warning { color: #fde68a; }
 main.xr-active .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
 main.xr-active .actions button { min-height: 3rem; }
 main.xr-active .error {

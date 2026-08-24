@@ -1,6 +1,6 @@
 # Open Web 3D Capture
 
-Current scope: Milestone 1, an Android Chrome WebXR basic recorder. It captures synchronized images, poses, CPU depth, and capture-window IMU data directly to OPFS at a maximum of four frames per second. Quality scoring and guidance are not implemented.
+Current scope: Milestone 2, an Android Chrome WebXR quality recorder. It evaluates up to four synchronized candidates per second, rejects blur, excessive motion, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, poses, CPU depth, and capture-window IMU data directly to OPFS.
 
 ## Run locally
 
@@ -28,17 +28,18 @@ adb reverse tcp:5173 tcp:5173
 
 Then open `http://localhost:5173` in Chrome on the USB-connected phone. `localhost` is treated as a potentially trustworthy origin. Re-run `adb reverse` after reconnecting the device.
 
-M1 test sequence:
+M2 test sequence:
 
 1. Confirm `immersive-ar`, OPFS, and the relevant sensor capabilities.
 2. Select **Start XR** and grant requested permissions.
 3. Confirm pose, projection matrix, intrinsics, and frame rate change live.
-4. Center a static object and select **Start capture**.
-5. Move slowly around it, including low, level, and elevated viewpoints.
-6. Select **Stop and save** after 50–100 accepted frames.
-7. Select **Export latest**.
-8. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, images, optional depth, and IMU samples.
-9. Load the dataset into Brush or another Nerfstudio-compatible reconstruction path.
+4. Center a static, textured object and select **Start capture**.
+5. Confirm the reticle and instruction react to sharpness, motion, tracking, and redundant views.
+6. Move slowly around the object, including low, level, and elevated viewpoints.
+7. Select **Stop and save** after 50–100 accepted frames.
+8. Select **Export latest**.
+9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, images, optional depth, and IMU samples.
+10. Load the dataset into Brush or another Nerfstudio-compatible reconstruction path.
 
 The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
 
@@ -48,6 +49,7 @@ The production build registers a network-first service worker with offline fallb
 - **Enable camera fallback** uses `getUserMedia()`. Those images are not WebXR pose-synchronized. Exported frame telemetry marks them with `imageSource: "media-stream"` and `imageSynchronized: false`; they cannot satisfy the reconstruction viability gate.
 - Depth capture currently requests CPU-accessible depth only. GPU-only depth implementations are reported by the probe but are not recorded.
 - M0 passed on the target phone with synchronized 886×1920 XR camera JPEGs, 160×90 CPU depth, tracked poses, IMU data, and OPFS reload recovery.
-- M1 is not accepted until a 50–100-frame dataset produces a recognizable reconstruction and confirms the exported pose convention.
+- M1 passed with a 90-frame chair capture that produced a recognizable, upright reconstruction in Brush. Floaters remain because M1 had no quality selection or seed point cloud.
+- M2 quality thresholds are initial values derived from the accepted chair trajectory. They require calibration on the target phone before M2 is accepted.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

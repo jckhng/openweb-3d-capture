@@ -1,4 +1,10 @@
-import type { CaptureDataset, CaptureFrame, CaptureMetadata, IMUSample } from "../shared/types";
+import type {
+  CaptureDataset,
+  CaptureDecision,
+  CaptureFrame,
+  CaptureMetadata,
+  IMUSample,
+} from "../shared/types";
 import type { CapturePersistence } from "./storage";
 
 const CAPTURES_DIRECTORY = "captures";
@@ -14,7 +20,14 @@ export class OPFSCaptureStore implements CapturePersistence {
     await directory.getDirectoryHandle("images", { create: true });
     await directory.getDirectoryHandle("depth", { create: true });
     await directory.getDirectoryHandle("telemetry", { create: true });
+    await directory.getDirectoryHandle("debug", { create: true });
     await writeJson(directory, "capture.json", metadata);
+  }
+
+  async appendDecision(captureId: string, decision: CaptureDecision): Promise<void> {
+    const directory = await this.captureDirectory(captureId);
+    const debugDirectory = await directory.getDirectoryHandle("debug");
+    await writeJson(debugDirectory, `${pad(decision.candidateId)}.json`, decision);
   }
 
   async appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void> {
@@ -83,13 +96,28 @@ export class OPFSCaptureStore implements CapturePersistence {
       }
     }
 
+    const decisions: CaptureDecision[] = [];
+    try {
+      const debugDirectory = await directory.getDirectoryHandle("debug");
+      const decisionNames: string[] = [];
+      for await (const [name, handle] of entriesOf(debugDirectory)) {
+        if (handle.kind === "file" && name.endsWith(".json")) decisionNames.push(name);
+      }
+      decisionNames.sort();
+      for (const name of decisionNames) {
+        decisions.push(await readJson<CaptureDecision>(debugDirectory, name));
+      }
+    } catch {
+      // M0/M1 captures predate quality decision telemetry.
+    }
+
     const telemetry = await directory.getDirectoryHandle("telemetry");
     const imuText = await readTextIfPresent(telemetry, "imu.jsonl");
     const imu = imuText
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as IMUSample);
-    return { capture, frames, imu, images, depths };
+    return { capture, frames, decisions, imu, images, depths };
   }
 
   async listCaptures(): Promise<CaptureMetadata[]> {

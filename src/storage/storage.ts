@@ -1,9 +1,16 @@
-import type { CaptureDataset, CaptureFrame, CaptureMetadata, IMUSample } from "../shared/types";
+import type {
+  CaptureDataset,
+  CaptureDecision,
+  CaptureFrame,
+  CaptureMetadata,
+  IMUSample,
+} from "../shared/types";
 
 export interface CapturePersistence {
   readonly kind: "opfs" | "memory";
   createCapture(metadata: CaptureMetadata): Promise<void>;
   appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void>;
+  appendDecision(captureId: string, decision: CaptureDecision): Promise<void>;
   appendImu(captureId: string, samples: IMUSample[]): Promise<void>;
   finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void>;
   loadCapture(captureId: string): Promise<CaptureDataset>;
@@ -23,4 +30,3 @@ export function makeCaptureId(now = Date.now()): string {
   const random = Math.random().toString(36).slice(2, 8);
   return `capture-${now}-${random}`;
 }
-

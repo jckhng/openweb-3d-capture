@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureDataset, CaptureFrame } from "../shared/types";
-import { buildDatasetFiles, buildNerfstudioTransforms } from "./serialization";
+import { buildDatasetFiles, buildNerfstudioTransforms, serializeDecisionsJsonl } from "./serialization";
 
 const frame: CaptureFrame = {
   id: 0,
@@ -56,6 +56,7 @@ describe("Nerfstudio serialization", () => {
         status: "complete",
       },
       frames: [frame],
+      decisions: [],
       imu: [],
       images: new Map([[frame.imagePath!, new Blob(["jpg"])]]),
       depths: new Map(),
@@ -67,10 +68,29 @@ describe("Nerfstudio serialization", () => {
       "capture.json",
       "telemetry/frames.jsonl",
       "telemetry/imu.jsonl",
+      "debug/session.jsonl",
       "images/000000.jpg",
     ]);
     const transforms = JSON.parse(files[0].data as string) as Record<string, unknown>;
     expect(transforms).not.toHaveProperty("captureId");
     expect(transforms).not.toHaveProperty("format");
+  });
+
+  it("serializes quality decisions separately from accepted frames", () => {
+    const decision = {
+      candidateId: 4,
+      timestamp: 1000,
+      accepted: false,
+      reason: "blur" as const,
+      trackingState: "tracked",
+      cameraToWorld: frame.cameraToWorld,
+      sharpnessScore: 0.2,
+      linearVelocity: 0.1,
+      angularVelocity: 0.2,
+      translationNovelty: 0.03,
+      rotationNovelty: 0.04,
+      quality: { blurScore: 0.8, motionScore: 0.1, noveltyScore: 1, coverageGain: 0 },
+    };
+    expect(serializeDecisionsJsonl([decision])).toBe(`${JSON.stringify(decision)}\n`);
   });
 });

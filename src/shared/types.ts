@@ -14,6 +14,31 @@ export interface FrameQuality {
   coverageGain: number;
 }
 
+export type CaptureDecisionReason =
+  | "accepted"
+  | "tracking"
+  | "image-unavailable"
+  | "unsynchronized-image"
+  | "blur"
+  | "motion"
+  | "redundant";
+
+export interface CaptureDecision {
+  candidateId: number;
+  acceptedFrameId?: number;
+  timestamp: number;
+  accepted: boolean;
+  reason: CaptureDecisionReason;
+  trackingState: string;
+  cameraToWorld: Matrix4;
+  sharpnessScore: number;
+  linearVelocity: number;
+  angularVelocity: number;
+  translationNovelty: number;
+  rotationNovelty: number;
+  quality: FrameQuality;
+}
+
 export interface CaptureFrame {
   id: number;
   timestamp: number;
@@ -61,6 +86,7 @@ export interface CaptureMetadata {
 export interface CaptureDataset {
   capture: CaptureMetadata;
   frames: CaptureFrame[];
+  decisions: CaptureDecision[];
   imu: IMUSample[];
   images: Map<string, Blob>;
   depths: Map<string, Blob>;

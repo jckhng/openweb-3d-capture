@@ -1,8 +1,11 @@
 import { exportDatasetZip } from "../dataset/zip";
+import { QualityKeyframeSelector } from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
+import { scoreLaplacianSharpness } from "../quality/sharpness";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
 import type {
-  CaptureDataset,
+  CaptureDecision,
+  CaptureDecisionReason,
   CaptureFrame,
   CapabilityReport,
   CaptureMetadata,
@@ -32,12 +35,42 @@ interface ActiveCapture {
   id: string;
   target?: number;
   frames: number;
+  candidates: number;
   metadata: CaptureMetadata;
   gate: TemporalKeyframeGate;
+  selector?: QualityKeyframeSelector;
   imuStartIndex: number;
   inFlight: boolean;
   stopping: boolean;
   pendingWrite?: Promise<void>;
+}
+
+interface CandidateFrameInput {
+  timestamp: number;
+  cameraToWorld: Matrix4;
+  projectionMatrix: ArrayLike<number>;
+  intrinsics?: Intrinsics;
+  width: number;
+  height: number;
+  trackingState: string;
+  depth: DepthCapture | null;
+  view: XRViewWithCamera;
+}
+
+export interface CaptureQualityTelemetry {
+  candidates: number;
+  rejected: number;
+  rejectedBlur: number;
+  rejectedMotion: number;
+  rejectedRedundant: number;
+  rejectedTracking: number;
+  rejectedImage: number;
+  sharpnessScore: number;
+  motionScore: number;
+  noveltyScore: number;
+  linearVelocity: number;
+  angularVelocity: number;
+  lastDecision: CaptureDecisionReason | "waiting";
 }
 
 export interface DiagnosticSnapshot {
@@ -57,6 +90,7 @@ export interface DiagnosticSnapshot {
   captureId?: string;
   captureMode?: "diagnostic" | "object";
   captureProgress: { current: number; target?: number };
+  captureQuality: CaptureQualityTelemetry;
   lastCaptureId?: string;
   lastImageStatus: string;
   lastError?: string;
@@ -68,6 +102,7 @@ export class XRDiagnosticController {
   private readonly imu = new IMUSensorRecorder();
   private readonly listeners = new Set<Listener>();
   private readonly canvas: HTMLCanvasElement;
+  private readonly qualityCanvas: HTMLCanvasElement;
   private readonly snapshot: DiagnosticSnapshot = {
     running: false,
     xrFps: 0,
@@ -76,6 +111,7 @@ export class XRDiagnosticController {
     imuSampleRate: 0,
     imuStatus: "not started",
     captureProgress: { current: 0 },
+    captureQuality: createQualityTelemetry(),
     lastImageStatus: "not attempted",
   };
   private session?: XRSession;
@@ -101,6 +137,9 @@ export class XRDiagnosticController {
     this.canvas = document.createElement("canvas");
     this.canvas.width = 1;
     this.canvas.height = 1;
+    this.qualityCanvas = document.createElement("canvas");
+    this.qualityCanvas.width = 128;
+    this.qualityCanvas.height = 128;
   }
 
   subscribe(listener: Listener): () => void {
@@ -118,6 +157,7 @@ export class XRDiagnosticController {
     return {
       ...this.snapshot,
       captureProgress: { ...this.snapshot.captureProgress },
+      captureQuality: { ...this.snapshot.captureQuality },
       pose: this.snapshot.pose?.map((row) => [...row]),
       projectionMatrix: this.snapshot.projectionMatrix ? [...this.snapshot.projectionMatrix] : undefined,
       intrinsics: this.snapshot.intrinsics ? { ...this.snapshot.intrinsics } : undefined,
@@ -246,8 +286,10 @@ export class XRDiagnosticController {
       id: metadata.captureId,
       target,
       frames: 0,
+      candidates: 0,
       metadata,
       gate: new TemporalKeyframeGate(4),
+      selector: captureMode === "object" ? new QualityKeyframeSelector() : undefined,
       imuStartIndex: this.imu.getSampleCount(),
       inFlight: false,
       stopping: false,
@@ -255,6 +297,7 @@ export class XRDiagnosticController {
     this.snapshot.captureId = metadata.captureId;
     this.snapshot.captureMode = captureMode;
     this.snapshot.captureProgress = { current: 0, target };
+    this.snapshot.captureQuality = createQualityTelemetry();
     this.snapshot.lastError = undefined;
     this.emit();
   }
@@ -340,7 +383,7 @@ export class XRDiagnosticController {
       active.gate.tryAccept(time)
     ) {
       active.inFlight = true;
-      const write = this.persistFrame({
+      const write = this.processCandidate({
         timestamp: time,
         cameraToWorld,
         projectionMatrix: view.projectionMatrix,
@@ -361,21 +404,45 @@ export class XRDiagnosticController {
     this.emit();
   };
 
-  private async persistFrame(input: {
-    timestamp: number;
-    cameraToWorld: Matrix4;
-    projectionMatrix: ArrayLike<number>;
-    intrinsics?: Intrinsics;
-    width: number;
-    height: number;
-    trackingState: string;
-    depth: DepthCapture | null;
-    view: XRViewWithCamera;
-  }): Promise<void> {
+  private async processCandidate(input: CandidateFrameInput): Promise<void> {
+    const active = this.activeCapture;
+    if (!active) return;
+    const candidateId = active.candidates;
+    active.candidates += 1;
+    const image = await this.readCameraImage(input.view);
+    let decision: CaptureDecision | undefined;
+    if (active.selector) {
+      decision = active.selector.evaluate({
+        candidateId,
+        timestamp: input.timestamp,
+        cameraToWorld: input.cameraToWorld,
+        trackingState: input.trackingState,
+        imageAvailable: Boolean(image),
+        imageSynchronized: image?.source === "xr-camera",
+        sharpnessScore: image?.sharpnessScore ?? 0,
+      });
+      if (decision.accepted) decision.acceptedFrameId = active.frames;
+      this.updateQualityTelemetry(decision);
+      await this.persistence.appendDecision(active.id, decision);
+      if (!decision.accepted) {
+        this.snapshot.lastImageStatus = `candidate rejected: ${decision.reason}`;
+        this.emit();
+        return;
+      }
+    }
+
+    await this.persistAcceptedFrame(input, image, decision?.quality ?? emptyFrameQuality());
+    if (decision) active.selector?.commitAccepted(decision);
+  }
+
+  private async persistAcceptedFrame(
+    input: CandidateFrameInput,
+    image: CapturedImage | null,
+    quality: CaptureFrame["quality"],
+  ): Promise<void> {
     const active = this.activeCapture;
     if (!active) return;
     const id = active.frames;
-    const image = await this.readCameraImage(input.view);
     const imagePath = image ? `images/${String(id).padStart(6, "0")}.jpg` : undefined;
     const outputWidth = image?.width ?? input.width;
     const outputHeight = image?.height ?? input.height;
@@ -397,13 +464,7 @@ export class XRDiagnosticController {
       trackingState: input.trackingState,
       imageSource: image?.source,
       imageSynchronized: image?.source === "xr-camera",
-      quality: {
-        // M1 uses only a temporal gate. Deterministic quality values arrive in M2.
-        blurScore: 0,
-        motionScore: 0,
-        noveltyScore: 0,
-        coverageGain: 0,
-      },
+      quality,
       depthPath: input.depth ? `depth/${String(id).padStart(6, "0")}.bin` : undefined,
       depthWidth: input.depth?.width,
       depthHeight: input.depth?.height,
@@ -433,6 +494,25 @@ export class XRDiagnosticController {
       await this.finalizeActiveCapture(active, "complete");
     }
     this.emit();
+  }
+
+  private updateQualityTelemetry(decision: CaptureDecision): void {
+    const telemetry = this.snapshot.captureQuality;
+    telemetry.candidates += 1;
+    telemetry.sharpnessScore = decision.sharpnessScore;
+    telemetry.motionScore = decision.quality.motionScore;
+    telemetry.noveltyScore = decision.quality.noveltyScore;
+    telemetry.linearVelocity = decision.linearVelocity;
+    telemetry.angularVelocity = decision.angularVelocity;
+    telemetry.lastDecision = decision.reason;
+    if (decision.accepted) return;
+
+    telemetry.rejected += 1;
+    if (decision.reason === "blur") telemetry.rejectedBlur += 1;
+    else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
+    else if (decision.reason === "redundant") telemetry.rejectedRedundant += 1;
+    else if (decision.reason === "tracking") telemetry.rejectedTracking += 1;
+    else telemetry.rejectedImage += 1;
   }
 
   private readDepth(frame: XRFrame, view: XRView): DepthCapture | null {
@@ -498,8 +578,9 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.putImageData(imageData, 0, 0);
+        const sharpnessScore = this.measureSharpness(canvas, width, height);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
-        if (blob) return { blob, width, height, source: "xr-camera" };
+        if (blob) return { blob, width, height, source: "xr-camera", sharpnessScore };
       } catch {
         // Fall through to the optional getUserMedia camera.
       }
@@ -513,11 +594,33 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.drawImage(this.rawVideo, 0, 0, width, height);
+        const sharpnessScore = this.measureSharpness(canvas, width, height);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
-        return blob ? { blob, width, height, source: "media-stream" } : null;
+        return blob ? { blob, width, height, source: "media-stream", sharpnessScore } : null;
       }
     }
     return null;
+  }
+
+  private measureSharpness(source: CanvasImageSource, width: number, height: number): number {
+    const context = this.qualityCanvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return 0;
+    const cropSize = Math.max(1, Math.floor(Math.min(width, height) * 0.6));
+    const sourceX = Math.floor((width - cropSize) / 2);
+    const sourceY = Math.floor((height - cropSize) / 2);
+    context.drawImage(
+      source,
+      sourceX,
+      sourceY,
+      cropSize,
+      cropSize,
+      0,
+      0,
+      this.qualityCanvas.width,
+      this.qualityCanvas.height,
+    );
+    const image = context.getImageData(0, 0, this.qualityCanvas.width, this.qualityCanvas.height);
+    return scoreLaplacianSharpness(image.data, image.width, image.height);
   }
 
   private ensureCameraReadPipeline(width: number, height: number): void {
@@ -644,6 +747,29 @@ interface CapturedImage {
   width: number;
   height: number;
   source: "xr-camera" | "media-stream";
+  sharpnessScore: number;
+}
+
+function createQualityTelemetry(): CaptureQualityTelemetry {
+  return {
+    candidates: 0,
+    rejected: 0,
+    rejectedBlur: 0,
+    rejectedMotion: 0,
+    rejectedRedundant: 0,
+    rejectedTracking: 0,
+    rejectedImage: 0,
+    sharpnessScore: 0,
+    motionScore: 0,
+    noveltyScore: 0,
+    linearVelocity: 0,
+    angularVelocity: 0,
+    lastDecision: "waiting",
+  };
+}
+
+function emptyFrameQuality(): CaptureFrame["quality"] {
+  return { blurScore: 0, motionScore: 0, noveltyScore: 0, coverageGain: 0 };
 }
 
 function scaleIntrinsics(

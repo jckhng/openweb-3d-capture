@@ -2,8 +2,8 @@ const MIN_RATE = 2;
 const MAX_RATE = 5;
 
 /**
- * M1 keyframe policy: cap persistence to a fixed rate without coupling the
- * policy to WebXR or UI state. Information-based selection replaces this in M2.
+ * Cap expensive image analysis to a fixed rate without coupling the policy to
+ * WebXR or UI state. M2 applies quality and novelty selection after this gate.
  */
 export class TemporalKeyframeGate {
   readonly intervalMs: number;

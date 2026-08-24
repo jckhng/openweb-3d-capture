@@ -1,4 +1,10 @@
-import type { CaptureDataset, CaptureFrame, CaptureMetadata, IMUSample } from "../shared/types";
+import type {
+  CaptureDataset,
+  CaptureDecision,
+  CaptureFrame,
+  CaptureMetadata,
+  IMUSample,
+} from "../shared/types";
 import type { CapturePersistence } from "./storage";
 
 export class MemoryCaptureStore implements CapturePersistence {
@@ -9,10 +15,15 @@ export class MemoryCaptureStore implements CapturePersistence {
     this.captures.set(metadata.captureId, {
       capture: { ...metadata },
       frames: [],
+      decisions: [],
       imu: [],
       images: new Map(),
       depths: new Map(),
     });
+  }
+
+  async appendDecision(captureId: string, decision: CaptureDecision): Promise<void> {
+    this.require(captureId).decisions.push(structuredClone(decision));
   }
 
   async appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void> {
@@ -40,6 +51,7 @@ export class MemoryCaptureStore implements CapturePersistence {
     return {
       capture: { ...dataset.capture },
       frames: structuredClone(dataset.frames),
+      decisions: structuredClone(dataset.decisions),
       imu: structuredClone(dataset.imu),
       images: new Map(dataset.images),
       depths: new Map(dataset.depths),
@@ -62,4 +74,3 @@ export class MemoryCaptureStore implements CapturePersistence {
     return dataset;
   }
 }
-

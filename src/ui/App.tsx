@@ -77,7 +77,7 @@ export function App() {
   return (
     <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
-        <p className="eyebrow">M1 basic recorder</p>
+        <p className="eyebrow">M2 quality recorder</p>
         <h1>Open Web 3D Capture</h1>
         <p className="lede">Record a durable, reconstruction-ready WebXR image and pose sequence.</p>
       </header>
@@ -86,7 +86,9 @@ export function App() {
         <div className="error" role="alert">{error ?? snapshot.lastError}</div>
       ) : null}
 
-      {snapshot.running ? <div className="reticle" aria-hidden="true" /> : null}
+      {snapshot.running ? (
+        <div className={`reticle ${qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
+      ) : null}
 
       <section className="capture-panel" aria-label="Capture controls">
         <div className="capture-status">
@@ -95,20 +97,21 @@ export function App() {
             <strong>{snapshot.captureProgress.current}</strong>
           </div>
           <div>
-            <span>capture state</span>
-            <strong>{snapshot.captureId ? "recording" : "idle"}</strong>
+            <span>{snapshot.captureId ? "rejected" : "capture state"}</span>
+            <strong>{snapshot.captureId ? snapshot.captureQuality.rejected : "idle"}</strong>
           </div>
           <div>
-            <span>minimum target</span>
-            <strong className={snapshot.captureProgress.current >= 50 ? "available" : undefined}>50</strong>
+            <span>{snapshot.captureId ? "sharpness" : "minimum target"}</span>
+            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < 0.35
+              ? "unavailable"
+              : "available"}
+            >
+              {snapshot.captureId ? formatPercent(snapshot.captureQuality.sharpnessScore) : 50}
+            </strong>
           </div>
         </div>
-        <p className="capture-instruction">
-          {snapshot.captureId
-            ? "Move slowly around the object. Include low, level, and elevated views. Stop after 50–100 frames."
-            : snapshot.running
-              ? "XR is ready. Center the object, then start the basic capture."
-              : "Start XR on the Android phone before recording."}
+        <p className={`capture-instruction ${qualityClass(snapshot.captureQuality.lastDecision)}`}>
+          {captureInstruction(snapshot)}
         </p>
         <div className="actions">
           {!snapshot.running ? (
@@ -204,6 +207,22 @@ export function App() {
               ? `${snapshot.captureProgress.current} / ${snapshot.captureProgress.target}`
               : `${snapshot.captureProgress.current} frames`}
           />
+          <Metric label="quality decision" value={snapshot.captureQuality.lastDecision} />
+          <Metric label="candidates" value={snapshot.captureQuality.candidates} />
+          <Metric label="rejected" value={snapshot.captureQuality.rejected} />
+          <Metric label="rejected blur" value={snapshot.captureQuality.rejectedBlur} />
+          <Metric label="rejected motion" value={snapshot.captureQuality.rejectedMotion} />
+          <Metric label="rejected redundant" value={snapshot.captureQuality.rejectedRedundant} />
+          <Metric label="rejected tracking" value={snapshot.captureQuality.rejectedTracking} />
+          <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
+          <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
+          <Metric label="motion score" value={formatPercent(snapshot.captureQuality.motionScore)} />
+          <Metric label="novelty score" value={formatPercent(snapshot.captureQuality.noveltyScore)} />
+          <Metric label="linear velocity" value={`${snapshot.captureQuality.linearVelocity.toFixed(3)} m/s`} />
+          <Metric
+            label="angular velocity"
+            value={`${(snapshot.captureQuality.angularVelocity * 180 / Math.PI).toFixed(1)} deg/s`}
+          />
         </dl>
         <div className="matrix-grid">
           <MatrixPanel title="Camera-to-world pose" matrix={snapshot.pose} />
@@ -294,6 +313,38 @@ function formatResolution(value?: { width: number; height: number }) {
 
 function formatNumber(value?: number) {
   return value === undefined ? "unavailable" : value.toPrecision(6);
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision"]) {
+  if (reason === "accepted") return "quality-good";
+  if (reason === "waiting") return "";
+  return "quality-warning";
+}
+
+function captureInstruction(snapshot: DiagnosticSnapshot) {
+  if (!snapshot.running) return "Start XR on the Android phone before recording.";
+  if (!snapshot.captureId) return "XR is ready. Center the object, then start capture.";
+  switch (snapshot.captureQuality.lastDecision) {
+    case "accepted":
+      return "GOOD — continue around the object. Stop after 50–100 accepted frames.";
+    case "blur":
+      return "HOLD STEADY OR MOVE FARTHER — the target is not sharp enough.";
+    case "motion":
+      return "SLOW DOWN — camera motion is too fast.";
+    case "redundant":
+      return "MOVE TO A NEW VIEW — this angle is already covered.";
+    case "tracking":
+      return "TRACKING LOST — aim at a detailed, well-lit area.";
+    case "image-unavailable":
+    case "unsynchronized-image":
+      return "XR CAMERA UNAVAILABLE — synchronized frames are required.";
+    default:
+      return "Hold steady while the first frame is evaluated.";
+  }
 }
 
 function humanize(value: string) {

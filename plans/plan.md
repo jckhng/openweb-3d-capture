@@ -1,8 +1,8 @@
 # Project Plan: Open Web 3D Capture
 
-## 0. Implementation status — 24 August 2026
+## 0. Implementation status — 25 August 2026
 
-Milestone 0 is accepted on the target phone. Milestone 1 basic recording is implemented and awaits its reconstruction test.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and awaits threshold calibration on the target phone.
 
 Implemented:
 
@@ -19,36 +19,46 @@ Implemented:
 * four-FPS temporal keyframe gate separated from XR/UI code
 * capture-window IMU export
 * network-first production service worker with offline fallback
+* compact immersive capture HUD that leaves the camera view unobstructed
+* center-crop Laplacian sharpness scoring
+* pose-derived linear/angular motion scoring
+* translation/rotation novelty selection
+* explicit rejection reasons and live quality guidance
+* durable per-candidate `debug/session.jsonl` telemetry
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (10 tests)
+npm test        PASS (21 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
-M0 hardware evidence:
+Hardware and reconstruction evidence:
 
 * 20 synchronized 886×1920 XR camera JPEGs
 * tracked, changing, finite poses and stable intrinsics
 * 20 valid 160×90 CPU depth buffers
 * IMU telemetry at approximately 56 Hz
 * complete export after page reload from OPFS
+* 90-frame synchronized chair capture with 90 valid depth frames
+* approximately 340-degree chair orbit with stable intrinsics and tracked poses
+* recognizable, upright chair reconstruction in Brush web, confirming pose convention
 
-Required before declaring M1 complete:
+Required before declaring M2 complete:
 
-1. Deploy the M1 recorder and capture 50–100 frames around a static object.
-2. Verify the export contains synchronized images, monotonic poses, capture-window IMU, and optional depth.
-3. Produce a recognizable reconstruction in Brush or another Nerfstudio-compatible path.
-4. Confirm or correct coordinate handedness and orientation from that reconstruction.
+1. Deploy the M2 recorder and exercise blur, fast motion, stationary/redundant views, and tracking loss.
+2. Confirm the compact HUD gives the correct single instruction and remains operable during XR.
+3. Capture 50–100 accepted frames and inspect `debug/session.jsonl` rejection distributions.
+4. Adjust thresholds if rejection rates or reconstruction quality show systematic errors.
+5. Reconstruct the filtered dataset and compare visible floaters with the M1 chair baseline.
 
 Plan constraints clarified by implementation:
 
 * API-surface detection is not proof of a granted WebXR feature; the live session is authoritative.
 * `getUserMedia()` frames are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. They remain a diagnostic fallback and are marked as unsynchronized in telemetry.
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
-* Do not begin M2 quality scoring until the M1 reconstruction gate passes.
+* Do not begin M3 coverage guidance until M2 thresholds have been exercised on the target phone.
 
 ## 1. Objective
 

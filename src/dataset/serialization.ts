@@ -1,5 +1,11 @@
 import { toNerfstudioTransform } from "../shared/matrix";
-import type { CaptureDataset, CaptureFrame, CaptureMetadata, IMUSample } from "../shared/types";
+import type {
+  CaptureDataset,
+  CaptureDecision,
+  CaptureFrame,
+  CaptureMetadata,
+  IMUSample,
+} from "../shared/types";
 
 export interface NerfstudioFrame {
   file_path: string;
@@ -53,6 +59,10 @@ export function serializeImuJsonl(samples: IMUSample[]): string {
   return samples.map((sample) => JSON.stringify(sample)).join("\n") + (samples.length ? "\n" : "");
 }
 
+export function serializeDecisionsJsonl(decisions: CaptureDecision[]): string {
+  return decisions.map((decision) => JSON.stringify(decision)).join("\n") + (decisions.length ? "\n" : "");
+}
+
 export function serializeCaptureMetadata(metadata: CaptureMetadata): string {
   return JSON.stringify(metadata, null, 2) + "\n";
 }
@@ -75,10 +85,13 @@ export function buildDatasetFiles(dataset: CaptureDataset): DatasetFile[] {
       path: "telemetry/imu.jsonl",
       data: serializeImuJsonl(dataset.imu),
     },
+    {
+      path: "debug/session.jsonl",
+      data: serializeDecisionsJsonl(dataset.decisions),
+    },
   ];
 
   for (const [path, data] of dataset.images) files.push({ path, data });
   for (const [path, data] of dataset.depths) files.push({ path, data });
   return files;
 }
-
