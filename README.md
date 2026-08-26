@@ -1,6 +1,6 @@
 # Open Web 3D Capture
 
-Current scope: Milestone 2, an Android Chrome WebXR quality recorder. It evaluates up to four synchronized candidates per second, rejects blur, excessive motion, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, poses, CPU depth, and capture-window IMU data directly to OPFS.
+Current scope: Milestone 2 calibration and the reconstruction-readiness bridge to Milestone 3. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, poses, CPU depth, and capture-window IMU data directly to OPFS.
 
 ## Run locally
 
@@ -33,8 +33,8 @@ M2 test sequence:
 1. Confirm `immersive-ar`, OPFS, and the relevant sensor capabilities.
 2. Select **Start XR** and grant requested permissions.
 3. Confirm pose, projection matrix, intrinsics, and frame rate change live.
-4. Center a static, textured object and select **Start capture**.
-5. Confirm the reticle and instruction react to sharpness, motion, tracking, and redundant views.
+4. Center a static, textured object at least 45 cm from the phone. Confirm the live target-distance value is plausible, then select **Start capture**.
+5. Confirm the reticle and instruction react to close range, sharpness, motion, tracking, and redundant views.
 6. Move slowly around the object, including low, level, and elevated viewpoints.
 7. Select **Stop and save** after 50–100 accepted frames.
 8. Select **Export latest**.
@@ -66,8 +66,11 @@ The production build registers a network-first service worker with offline fallb
 - Depth capture currently requests CPU-accessible depth only. GPU-only depth implementations are reported by the probe but are not recorded.
 - M0 passed on the target phone with synchronized 886×1920 XR camera JPEGs, 160×90 CPU depth, tracked poses, IMU data, and OPFS reload recovery.
 - M1 passed with a 90-frame chair capture that produced a recognizable, upright reconstruction in Brush. Floaters remain because M1 had no quality selection or seed point cloud.
-- M2 quality thresholds are initial values derived from the accepted chair trajectory. They require calibration on the target phone before M2 is accepted.
-- The first M2 seesaw capture accepted 105 of 118 candidates. Its recorded sharpness score saturated and rejected no frames for blur, so blur normalization still requires correction.
+- M2 selection is implemented but requires one more target-phone capture before acceptance. The first M2 seesaw capture accepted 105 of 118 candidates and exposed saturated blur scores plus overly permissive motion limits.
+- Blur normalization and motion limits have been recalibrated from that telemetry. Replay predicts 5.9% blur rejection and 33.1% motion rejection; these predictions require a live capture test.
+- ARCore commonly uses fixed focus for tracking, and WebXR exposes no autofocus, lens-selection, or manual-focus control. The recorder therefore reports center depth and rejects targets closer than a provisional 45 cm focus floor. This cannot restore detail that was optically blurred.
+- Web v1 should be treated as a medium-object capture path until the 45 cm floor and minimum usable object size are measured on the target phone. Reliable close-range small-object capture likely requires a native Android path with camera focus control.
+- WebXR poses are retained as metric priors, not assumed to be reconstruction-grade final poses. The rigid seesaw dataset registered completely in COLMAP, while visual refinement found pose, focal-length, and lens-distortion corrections. An on-phone readiness validator/refiner is the next implementation bound.
 - A depth-derived seed point cloud is generated during ZIP export. Spirula interoperability still requires a direct import test of the new export.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

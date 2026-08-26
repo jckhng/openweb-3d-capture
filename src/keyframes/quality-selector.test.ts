@@ -44,6 +44,7 @@ describe("QualityKeyframeSelector", () => {
     [{ trackingState: "emulated" }, "tracking"],
     [{ imageAvailable: false }, "image-unavailable"],
     [{ imageSynchronized: false }, "unsynchronized-image"],
+    [{ targetDistance: 0.3 }, "too-close"],
     [{ sharpnessScore: 0.2 }, "blur"],
   ] as const)("rejects invalid input as %s", (overrides, reason) => {
     const selector = new QualityKeyframeSelector();
@@ -66,7 +67,7 @@ describe("QualityKeyframeSelector", () => {
     selector.commitAccepted(first);
     expect(selector.evaluate(candidate({ candidateId: 1, timestamp: 250, cameraToWorld: pose(0.005) })).reason)
       .toBe("redundant");
-    expect(selector.evaluate(candidate({ candidateId: 2, timestamp: 500, cameraToWorld: pose(0.006, Math.PI / 30) })).reason)
+    expect(selector.evaluate(candidate({ candidateId: 2, timestamp: 1000, cameraToWorld: pose(0.006, Math.PI / 30) })).reason)
       .toBe("accepted");
   });
 });

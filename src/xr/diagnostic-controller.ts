@@ -2,6 +2,7 @@ import { exportDatasetZip } from "../dataset/zip";
 import { QualityKeyframeSelector } from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
 import { scoreLaplacianSharpness } from "../quality/sharpness";
+import { medianCenterDepth } from "../quality/focus-distance";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
 import type {
   CaptureDecision,
@@ -65,11 +66,13 @@ export interface CaptureQualityTelemetry {
   rejectedRedundant: number;
   rejectedTracking: number;
   rejectedImage: number;
+  rejectedTooClose: number;
   sharpnessScore: number;
   motionScore: number;
   noveltyScore: number;
   linearVelocity: number;
   angularVelocity: number;
+  targetDistance?: number;
   lastDecision: CaptureDecisionReason | "waiting";
 }
 
@@ -85,6 +88,7 @@ export interface DiagnosticSnapshot {
   cameraResolution?: { width: number; height: number };
   depthResolution?: { width: number; height: number };
   depthScale?: number;
+  targetDistance?: number;
   imuSampleRate: number;
   imuStatus: string;
   captureId?: string;
@@ -371,6 +375,7 @@ export class XRDiagnosticController {
     this.snapshot.cameraResolution = width > 0 && height > 0 ? { width, height } : undefined;
     this.snapshot.depthResolution = depth ? { width: depth.width, height: depth.height } : undefined;
     this.snapshot.depthScale = depth?.rawValueToMeters;
+    this.snapshot.targetDistance = depth?.targetDistance;
     this.snapshot.trackingState = pose.emulatedPosition ? "emulated" : "tracked";
 
     const active = this.activeCapture;
@@ -420,6 +425,7 @@ export class XRDiagnosticController {
         imageAvailable: Boolean(image),
         imageSynchronized: image?.source === "xr-camera",
         sharpnessScore: image?.sharpnessScore ?? 0,
+        targetDistance: input.depth?.targetDistance,
       });
       if (decision.accepted) decision.acceptedFrameId = active.frames;
       this.updateQualityTelemetry(decision);
@@ -464,6 +470,7 @@ export class XRDiagnosticController {
       trackingState: input.trackingState,
       imageSource: image?.source,
       imageSynchronized: image?.source === "xr-camera",
+      targetDistance: input.depth?.targetDistance,
       quality,
       depthPath: input.depth ? `depth/${String(id).padStart(6, "0")}.bin` : undefined,
       depthWidth: input.depth?.width,
@@ -504,11 +511,13 @@ export class XRDiagnosticController {
     telemetry.noveltyScore = decision.quality.noveltyScore;
     telemetry.linearVelocity = decision.linearVelocity;
     telemetry.angularVelocity = decision.angularVelocity;
+    telemetry.targetDistance = decision.targetDistance;
     telemetry.lastDecision = decision.reason;
     if (decision.accepted) return;
 
     telemetry.rejected += 1;
     if (decision.reason === "blur") telemetry.rejectedBlur += 1;
+    else if (decision.reason === "too-close") telemetry.rejectedTooClose += 1;
     else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
     else if (decision.reason === "redundant") telemetry.rejectedRedundant += 1;
     else if (decision.reason === "tracking") telemetry.rejectedTracking += 1;
@@ -528,6 +537,7 @@ export class XRDiagnosticController {
         rawValueToMeters: information.rawValueToMeters,
         dataFormat: this.session?.depthDataFormat,
         normDepthBufferFromNormView: fromWebXRTransform(information.normDepthBufferFromNormView),
+        targetDistance: medianCenterDepth(information.getDepthInMeters.bind(information)),
         blob: data ? new Blob([data], { type: "application/octet-stream" }) : undefined,
       };
     } catch {
@@ -739,6 +749,7 @@ interface DepthCapture {
   rawValueToMeters: number;
   dataFormat?: string;
   normDepthBufferFromNormView: Matrix4;
+  targetDistance?: number;
   blob?: Blob;
 }
 
@@ -759,6 +770,7 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
     rejectedRedundant: 0,
     rejectedTracking: 0,
     rejectedImage: 0,
+    rejectedTooClose: 0,
     sharpnessScore: 0,
     motionScore: 0,
     noveltyScore: 0,

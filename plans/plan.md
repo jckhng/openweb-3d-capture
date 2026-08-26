@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 26 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and awaits threshold calibration on the target phone.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented, recalibrated from the first target-phone dataset, and awaits a second hardware capture. Reconstruction-readiness refinement is now the required bridge between M2 and M3.
 
 Implemented:
 
@@ -28,12 +28,14 @@ Implemented:
 * depth-to-world back-projection with RGB sampling
 * voxel-downsampled binary RGB `pointcloud.ply` generation during ZIP export
 * Nerfstudio `ply_file_path` export and a desktop converter for existing captures
+* center-depth target-distance telemetry and rejection below the provisional WebXR focus floor
+* recalibrated sharpness normalization and conservative capture-motion limits
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (30 tests)
+npm test        PASS (33 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -49,24 +51,38 @@ Hardware and reconstruction evidence:
 * recognizable, upright chair reconstruction in Brush web, confirming pose convention
 * 105-frame M2 seesaw capture with valid synchronized RGB, depth, and WebXR poses
 * seesaw depth seed cloud with 153,784 finite colored vertices and plausible world orientation
-* adjacent-frame static-feature checks with approximately 1.1 source-pixel median pose-consistency error
+* all 105 seesaw frames registered by independent COLMAP reconstruction
+* COLMAP sparse model with 13,276 points and 0.78-pixel mean reprojection error
 
 M2 calibration findings:
 
 * 105 of 118 seesaw candidates were accepted; 9 were rejected for motion and 4 as redundant.
 * no candidate was rejected for blur because the current normalized sharpness score compressed into 0.876–0.984.
 * an independent Laplacian measurement found approximately 1.7× variation between the softest and sharpest source frames.
-* visible seesaw duplication is more consistent with motion of the spring-mounted subject plus isolated frame outliers than a global WebXR pose failure.
+* recalibrated sharpness replay spans 0.370–0.836 and rejects 7 of 118 candidates (5.9%) at the provisional 0.50 threshold.
+* motion replay rejects 39 of 118 candidates (33.1%) at 0.40 m/s or 0.45 rad/s; the initially proposed tighter limits would have rejected approximately 90% and were discarded.
+* the seesaw was confirmed rigid during capture; scene motion is not the explanation for duplication.
+* after global similarity alignment, COLMAP and WebXR poses differ by a median 1.6 cm and 0.92 degrees.
+* COLMAP refined focal lengths by approximately 1.5% and estimated non-zero radial/tangential distortion omitted by the WebXR pinhole export.
+* reconstruction duplication is therefore a systematic camera-model and trajectory-accuracy problem, not only a small set of removable pose outliers.
+
+Close-focus findings:
+
+* ARCore currently defaults most supported cameras to fixed focus for tracking.
+* WebXR raw camera access exposes the aligned camera texture but no autofocus, lens selection, or focus-distance control.
+* the web recorder cannot recover optical detail that was never focused; it must reject too-close/soft frames and declare a minimum supported capture scale.
+* the provisional minimum target distance is 0.45 m and requires calibration on the target phone.
 
 Required before declaring M2 complete:
 
-1. Deploy the M2 recorder and exercise blur, fast motion, stationary/redundant views, and tracking loss.
+1. Deploy the recalibrated M2 recorder and exercise close range, blur, fast motion, stationary/redundant views, and tracking loss.
 2. Confirm the compact HUD gives the correct single instruction and remains operable during XR.
 3. Capture 50–100 accepted frames and inspect `debug/session.jsonl` rejection distributions.
 4. Adjust thresholds if rejection rates or reconstruction quality show systematic errors.
 5. Reconstruct the filtered dataset and compare visible floaters with the M1 chair baseline.
-6. Replace the saturated blur normalization and repeat the sharp/soft-frame rejection test.
-7. A/B test sharp-only, pose-outlier-filtered, and short-time-window subsets before attributing reconstruction duplication to WebXR.
+6. Verify the 0.45 m distance gate against a printed high-frequency target at 0.25, 0.35, 0.45, and 0.60 m.
+7. Confirm the recalibrated blur and motion limits still allow a deliberate 50–100-frame orbit.
+8. Record the minimum object size that retains identifiable detail at the calibrated focus floor; constrain web v1 scope if necessary.
 
 Plan constraints clarified by implementation:
 
@@ -75,6 +91,8 @@ Plan constraints clarified by implementation:
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
 * Do not begin M3 coverage guidance until M2 thresholds have been exercised on the target phone.
 * M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
+* WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
+* Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
 
 ## 1. Objective
 
@@ -86,16 +104,17 @@ Its job is to:
 
 1. access camera + WebXR tracking data,
 2. select useful reconstruction keyframes,
-3. guide the user toward missing viewpoints,
-4. retain useful camera/depth/IMU telemetry,
-5. save everything locally on-device,
-6. export a standard dataset that can be processed by:
+3. visually validate and refine the camera model and poses where device resources permit,
+4. guide the user toward missing viewpoints and weak visual connections,
+5. retain useful camera/depth/IMU telemetry,
+6. save everything locally on-device,
+7. export a standard dataset that can be processed by:
 
    * Brush
    * Spirula Studio
    * LichtFeld Studio
    * Nerfstudio-compatible tooling
-7. optionally load the resulting splat back onto the phone for viewing.
+8. optionally load the resulting splat back onto the phone for viewing.
 
 Core philosophy:
 
@@ -566,6 +585,33 @@ UI can threshold it later.
 
 ---
 
+# 12A. Close-focus and minimum object scale
+
+WebXR does not expose ARCore focus mode or lens selection. Treat optical focus as an input constraint, not a post-processing problem.
+
+When CPU depth is available:
+
+```text
+sample center depth
+    ↓
+below calibrated focus floor
+    → reject: too-close
+```
+
+The initial focus floor is 0.45 m. Calibrate it with a printed high-frequency target at several distances on the primary phone.
+
+Required behavior:
+
+* show target distance before and during capture
+* distinguish `too-close` from motion blur
+* never accept a close frame merely because it contains high-contrast blurred edges
+* retain sharpness as the final authority when depth is missing or the object does not occupy the center
+* document the minimum practical object size at the calibrated distance
+
+If small-object detail remains inadequate at the focus floor, constrain web v1 to medium objects. Autofocus, macro-lens selection, and manual focus require a native Android capture path unless WebXR adds controls.
+
+---
+
 # 13. Motion detection
 
 Use XR pose and gyro if available.
@@ -619,6 +665,67 @@ score =
 Do not over-optimize the formula initially.
 
 Log every component.
+
+---
+
+# 14A. Reconstruction-readiness validation and pose refinement
+
+WebXR pose, depth, and IMU are priors. A dataset is direct-train ready only when its images agree with its camera model to a measured tolerance.
+
+Progressive pipeline:
+
+```text
+accepted WebXR keyframe
+    ↓
+low-resolution feature extraction in a worker
+    ↓
+match local neighbors chosen from WebXR overlap
+    ↓
+estimate shared intrinsics/distortion and small SE(3) pose corrections
+    ↓
+loop closure near previously visited viewpoints
+    ↓
+final bundle adjustment
+    ↓
+readiness report
+```
+
+Phone implementation constraints:
+
+* process accepted keyframes incrementally instead of rerunning full SfM after capture
+* use WebXR poses to restrict pair selection and regularize corrections
+* use depth and IMU to preserve metric scale and reject implausible corrections
+* run feature work outside the UI/XR thread
+* retain raw images, WebXR poses, refined poses, and residuals independently
+* fail safely to an unrefined export when resources or visual connectivity are insufficient
+
+Readiness report should include:
+
+```text
+registered frame percentage
+median and p90 reprojection residual
+connected pose-graph coverage
+loop-closure status
+intrinsics/distortion estimate
+maximum pose correction
+DIRECT-TRAIN READY | NEEDS DESKTOP REFINEMENT
+```
+
+Desktop fallback paths:
+
+* Spirula Studio native raw-photo/video SfM
+* LichtFeld Studio COLMAP Reconstruction plugin
+* project `npm run refine -- <capture-directory>` compatibility tool
+
+Acceptance for the first phone prototype:
+
+* all 105 rigid seesaw frames connect or rejected frames are explicitly reported
+* median visual residual below 1.5 pixels
+* bounded memory without retaining decoded full-resolution images
+* final optimization completes within 60 seconds on the target phone
+* refined seesaw reconstruction materially reduces duplicate surfaces against the original WebXR export
+
+Do not begin M3 spherical guidance until this validator can expose weak visual connections. M3 guidance should improve pose-graph conditioning, not only fill geometric view bins.
 
 ---
 
@@ -1309,6 +1416,21 @@ This is the single most important early gate.
 
 ---
 
+## Gate 1A — direct-train readiness
+
+For a rigid, textured target:
+
+```text
+visual residuals pass threshold
+camera distortion represented
+pose graph connected
+refined reconstruction has no systematic duplicate surfaces
+```
+
+If phone refinement fails this gate, export must clearly request downstream SfM rather than label the dataset direct-train ready.
+
+---
+
 ## Gate 2 — interoperability
 
 The same dataset works with at least two of:
@@ -1384,21 +1506,29 @@ Give the agent work in this order:
 
 8. Keyframe selection
 
-9. Object target model
+9. Close-focus and calibrated blur rejection
 
-10. Coverage visualization
+10. Visual pose validation and readiness report
 
-11. Next-view guidance
+11. Incremental on-phone pose/intrinsics refinement
 
-12. Capture library
+12. Destination SfM adapters and desktop fallback
 
-13. Depth recording
+13. Object target model
 
-14. PLY seed generation
+14. Pose-graph-aware coverage visualization
 
-15. Splat viewer
+15. Next-view guidance
 
-16. Scene Mode
+16. Capture library
+
+17. Depth recording
+
+18. PLY seed generation
+
+19. Splat viewer
+
+20. Scene Mode
 ```
 
 Do not let the agent jump ahead to splat rendering because it looks more visually interesting.

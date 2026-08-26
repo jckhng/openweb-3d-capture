@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import type { DiagnosticSnapshot } from "../xr/diagnostic-controller";
 import { XRDiagnosticController } from "../xr/diagnostic-controller";
 import { probeCapabilities } from "../xr/capabilities";
@@ -6,6 +7,10 @@ import type { CapabilityReport, CaptureMetadata, Matrix4 } from "../shared/types
 import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
 import { isOpfsSupported } from "../storage/storage";
+
+const MINIMUM_TARGET_DISTANCE_CM = Math.round(
+  DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
+);
 
 function createStore() {
   return isOpfsSupported() ? new OPFSCaptureStore() : new MemoryCaptureStore();
@@ -102,7 +107,7 @@ export function App() {
           </div>
           <div>
             <span>{snapshot.captureId ? "sharpness" : "minimum target"}</span>
-            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < 0.35
+            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness
               ? "unavailable"
               : "available"}
             >
@@ -197,6 +202,10 @@ export function App() {
           <Metric label="camera resolution" value={formatResolution(snapshot.cameraResolution)} />
           <Metric label="depth resolution" value={formatResolution(snapshot.depthResolution)} />
           <Metric label="depth scale" value={formatNumber(snapshot.depthScale)} />
+          <Metric
+            label="target distance"
+            value={snapshot.targetDistance === undefined ? "unavailable" : `${snapshot.targetDistance.toFixed(2)} m`}
+          />
           <Metric label="IMU samples/sec" value={snapshot.imuSampleRate.toFixed(1)} />
           <Metric label="IMU" value={snapshot.imuStatus} />
           <Metric label="image" value={snapshot.lastImageStatus} />
@@ -215,6 +224,7 @@ export function App() {
           <Metric label="rejected redundant" value={snapshot.captureQuality.rejectedRedundant} />
           <Metric label="rejected tracking" value={snapshot.captureQuality.rejectedTracking} />
           <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
+          <Metric label="rejected too close" value={snapshot.captureQuality.rejectedTooClose} />
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
           <Metric label="motion score" value={formatPercent(snapshot.captureQuality.motionScore)} />
           <Metric label="novelty score" value={formatPercent(snapshot.captureQuality.noveltyScore)} />
@@ -327,12 +337,20 @@ function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision
 
 function captureInstruction(snapshot: DiagnosticSnapshot) {
   if (!snapshot.running) return "Start XR on the Android phone before recording.";
-  if (!snapshot.captureId) return "XR is ready. Center the object, then start capture.";
+  if (!snapshot.captureId) {
+    if (
+      snapshot.targetDistance !== undefined &&
+      snapshot.targetDistance < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance
+    ) return "MOVE FARTHER — fixed-focus WebXR is unreliable at this distance.";
+    return `XR is ready. Center the object at least ${MINIMUM_TARGET_DISTANCE_CM} cm away, then start capture.`;
+  }
   switch (snapshot.captureQuality.lastDecision) {
     case "accepted":
       return "GOOD — continue around the object. Stop after 50–100 accepted frames.";
     case "blur":
       return "HOLD STEADY OR MOVE FARTHER — the target is not sharp enough.";
+    case "too-close":
+      return `MOVE FARTHER — fixed-focus WebXR is unreliable below ${MINIMUM_TARGET_DISTANCE_CM} cm.`;
     case "motion":
       return "SLOW DOWN — camera motion is too fast.";
     case "redundant":

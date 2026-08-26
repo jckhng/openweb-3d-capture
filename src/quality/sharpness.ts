@@ -1,4 +1,6 @@
-const DEFAULT_NORMALIZATION = 0.0025;
+// Calibrated against the first target-phone M2 dataset. The previous 0.0025
+// value compressed real captures into 0.876-0.984 and could not reject blur.
+const DEFAULT_NORMALIZATION = 0.03;
 
 /**
  * Estimate high-frequency image energy from normalized RGBA pixels.

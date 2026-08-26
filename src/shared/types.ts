@@ -19,6 +19,7 @@ export type CaptureDecisionReason =
   | "tracking"
   | "image-unavailable"
   | "unsynchronized-image"
+  | "too-close"
   | "blur"
   | "motion"
   | "redundant";
@@ -36,6 +37,7 @@ export interface CaptureDecision {
   angularVelocity: number;
   translationNovelty: number;
   rotationNovelty: number;
+  targetDistance?: number;
   quality: FrameQuality;
 }
 
@@ -50,6 +52,7 @@ export interface CaptureFrame {
   trackingState: string;
   imageSource?: "xr-camera" | "media-stream";
   imageSynchronized?: boolean;
+  targetDistance?: number;
   quality: FrameQuality;
   depthPath?: string;
   depthWidth?: number;

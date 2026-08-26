@@ -3,6 +3,7 @@ import type { CaptureDecision, CaptureDecisionReason, Matrix4 } from "../shared/
 
 export interface QualitySelectorConfig {
   minimumSharpness: number;
+  minimumTargetDistance: number;
   maximumLinearVelocity: number;
   maximumAngularVelocity: number;
   minimumTranslation: number;
@@ -10,9 +11,11 @@ export interface QualitySelectorConfig {
 }
 
 export const DEFAULT_QUALITY_SELECTOR_CONFIG: Readonly<QualitySelectorConfig> = {
-  minimumSharpness: 0.35,
-  maximumLinearVelocity: 0.45,
-  maximumAngularVelocity: 1.2,
+  minimumSharpness: 0.5,
+  minimumTargetDistance: 0.45,
+  // Replaying the first rigid M2 orbit rejects 33% of candidates at these limits.
+  maximumLinearVelocity: 0.4,
+  maximumAngularVelocity: 0.45,
   minimumTranslation: 0.02,
   minimumRotation: Math.PI / 60,
 };
@@ -25,6 +28,7 @@ export interface QualityCandidate {
   imageAvailable: boolean;
   imageSynchronized: boolean;
   sharpnessScore: number;
+  targetDistance?: number;
 }
 
 export class QualityKeyframeSelector {
@@ -64,6 +68,7 @@ export class QualityKeyframeSelector {
       angularVelocity: motion.angularVelocity,
       translationNovelty: novelty.translation,
       rotationNovelty: novelty.rotation,
+      targetDistance: candidate.targetDistance,
       quality: {
         blurScore,
         motionScore: clamp01(motionScore),
@@ -114,6 +119,11 @@ export class QualityKeyframeSelector {
     if (candidate.trackingState !== "tracked") return "tracking";
     if (!candidate.imageAvailable) return "image-unavailable";
     if (!candidate.imageSynchronized) return "unsynchronized-image";
+    if (
+      candidate.targetDistance !== undefined &&
+      candidate.targetDistance > 0 &&
+      candidate.targetDistance < this.config.minimumTargetDistance
+    ) return "too-close";
     if (sharpnessScore < this.config.minimumSharpness) return "blur";
     if (motionScore > 1) return "motion";
     if (this.previousAccepted && noveltyScore < 1) return "redundant";
