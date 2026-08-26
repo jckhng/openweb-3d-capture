@@ -57,6 +57,36 @@ It creates `pointcloud.ply` and atomically adds `"ply_file_path": "pointcloud.pl
 npm run pointcloud -- /path/to/capture-directory --force
 ```
 
+## Prepare a refined desktop dataset
+
+The refinement tools use an isolated Python environment. The system COLMAP installation is not changed.
+
+```bash
+python3 -m venv .venv-refinement
+.venv-refinement/bin/pip install -r tools/requirements-refinement.txt
+.venv-refinement/bin/python tools/prepare-refinement-benchmark.py \
+  /path/to/capture \
+  /path/to/colmap/sparse/0 \
+  /path/to/refined-output \
+  --copy-assets
+```
+
+The output contains:
+
+- `transforms.json`: readiness-selected standard export.
+- `transforms_webxr.json`: original metric WebXR poses.
+- `transforms_refined.json`: visually refined poses and OPENCV distortion.
+- `refinement.json`: registration, residual, calibration, and readiness result.
+- `colmap/images` and `colmap/sparse/0`: portable COLMAP workspace for LichtFeld.
+- `pointcloud.ply`: metric seed cloud for Spirula when the source capture contains depth.
+
+Run the worker-safe low-resolution feature prototype against the derived dataset:
+
+```bash
+npm run benchmark:features -- /path/to/refined-output \
+  --output /path/to/refined-output/feature-tracking.json
+```
+
 The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
 
 ## Current limitations
@@ -71,6 +101,7 @@ The production build registers a network-first service worker with offline fallb
 - ARCore commonly uses fixed focus for tracking, and WebXR exposes no autofocus, lens-selection, or manual-focus control. The recorder therefore reports center depth and rejects targets closer than a provisional 45 cm focus floor. This cannot restore detail that was optically blurred.
 - Web v1 should be treated as a medium-object capture path until the 45 cm floor and minimum usable object size are measured on the target phone. Reliable close-range small-object capture likely requires a native Android path with camera focus control.
 - WebXR poses are retained as metric priors, not assumed to be reconstruction-grade final poses. The rigid seesaw dataset registered completely in COLMAP, while visual refinement found pose, focal-length, and lens-distortion corrections. An on-phone readiness validator/refiner is the next implementation bound.
+- Dual-pose serialization and a low-resolution TypeScript feature/reprojection prototype are implemented. The seesaw benchmark connects all 104 adjacent pairs and improves median pair residual from 1.07 px with WebXR poses to 0.82 px with refined poses. The first BRIEF prototype does not yet establish a usable loop closure.
 - A depth-derived seed point cloud is generated during ZIP export. Spirula interoperability still requires a direct import test of the new export.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

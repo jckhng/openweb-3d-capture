@@ -2,6 +2,9 @@ node_modules
 dist
 coverage
 results/
+.venv*/
+__pycache__/
+*.pyc
 .DS_Store
 
 .vercel

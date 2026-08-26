@@ -122,4 +122,121 @@ describe("Nerfstudio serialization", () => {
     expect(transforms.ply_file_path).toBe("pointcloud.ply");
     expect(files.at(-1)).toEqual(pointCloud);
   });
+
+  it("preserves raw WebXR and refined poses in separate compatible exports", () => {
+    const refinedPose = frame.cameraToWorld.map((row) => [...row]);
+    refinedPose[0][3] += 0.02;
+    const refinedFrame: CaptureFrame = {
+      ...frame,
+      webxrCameraToWorld: frame.cameraToWorld,
+      refinedCameraToWorld: refinedPose,
+      poseCorrection: { translationMeters: 0.02, rotationRadians: 0 },
+    };
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-refined",
+        createdAt: "2026-08-27T00:00:00.000Z",
+        updatedAt: "2026-08-27T00:00:00.000Z",
+        captureMode: "object",
+        source: "replay",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames: [refinedFrame],
+      decisions: [],
+      imu: [],
+      images: new Map(),
+      depths: new Map(),
+      refinement: {
+        method: "test",
+        calibration: {
+          cameraModel: "OPENCV",
+          width: 1920,
+          height: 1080,
+          intrinsics: { fx: 1010, fy: 1011, cx: 959, cy: 541 },
+          distortion: { k1: 0.1, k2: -0.01, p1: 0.001, p2: -0.002 },
+        },
+        registeredFrameCount: 1,
+        totalFrameCount: 1,
+        medianReprojectionErrorPixels: 0.8,
+        p90ReprojectionErrorPixels: 1.5,
+        directTrainReady: true,
+      },
+    };
+
+    const files = buildDatasetFiles(dataset);
+    expect(files.map((file) => file.path)).toContain("transforms_webxr.json");
+    expect(files.map((file) => file.path)).toContain("transforms_refined.json");
+    expect(files.map((file) => file.path)).toContain("refinement.json");
+
+    const main = JSON.parse(files.find((file) => file.path === "transforms.json")!.data as string);
+    expect(main.frames[0]).toMatchObject({
+      transform_matrix: refinedPose,
+      transform_matrix_source: "refined",
+      webxr_transform_matrix: frame.cameraToWorld,
+      refined_transform_matrix: refinedPose,
+    });
+    expect(main).toMatchObject({
+      fl_x: 1010,
+      k1: 0.1,
+      p2: -0.002,
+    });
+
+    const raw = JSON.parse(files.find((file) => file.path === "transforms_webxr.json")!.data as string);
+    expect(raw.frames[0].transform_matrix).toEqual(frame.cameraToWorld);
+    const refined = JSON.parse(files.find((file) => file.path === "transforms_refined.json")!.data as string);
+    expect(refined.frames[0].transform_matrix).toEqual(refinedPose);
+  });
+
+  it("keeps raw WebXR poses authoritative when refinement is not ready", () => {
+    const refinedPose = frame.cameraToWorld.map((row) => [...row]);
+    refinedPose[1][3] += 0.03;
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-unready",
+        createdAt: "2026-08-27T00:00:00.000Z",
+        updatedAt: "2026-08-27T00:00:00.000Z",
+        captureMode: "object",
+        source: "replay",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames: [{ ...frame, refinedCameraToWorld: refinedPose }],
+      decisions: [],
+      imu: [],
+      images: new Map(),
+      depths: new Map(),
+      refinement: {
+        method: "test",
+        calibration: {
+          cameraModel: "OPENCV",
+          width: 1920,
+          height: 1080,
+          intrinsics: frame.intrinsics,
+          distortion: { k1: 0, k2: 0, p1: 0, p2: 0 },
+        },
+        registeredFrameCount: 1,
+        totalFrameCount: 1,
+        medianReprojectionErrorPixels: 3,
+        p90ReprojectionErrorPixels: 8,
+        directTrainReady: false,
+        fallbackReason: "residual threshold failed",
+      },
+    };
+
+    const files = buildDatasetFiles(dataset);
+    const main = JSON.parse(files.find((file) => file.path === "transforms.json")!.data as string);
+    expect(main.frames[0].transform_matrix).toEqual(frame.cameraToWorld);
+    expect(main.frames[0].transform_matrix_source).toBe("webxr");
+  });
 });

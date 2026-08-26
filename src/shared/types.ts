@@ -7,6 +7,21 @@ export interface Intrinsics {
   cy: number;
 }
 
+export interface LensDistortion {
+  k1: number;
+  k2: number;
+  p1: number;
+  p2: number;
+}
+
+export interface CameraCalibration {
+  cameraModel: "OPENCV";
+  width: number;
+  height: number;
+  intrinsics: Intrinsics;
+  distortion: LensDistortion;
+}
+
 export interface FrameQuality {
   blurScore: number;
   motionScore: number;
@@ -48,7 +63,20 @@ export interface CaptureFrame {
   width: number;
   height: number;
   intrinsics: Intrinsics;
+  /** Original metric WebXR pose. `cameraToWorld` remains its legacy alias. */
+  webxrCameraToWorld?: Matrix4;
   cameraToWorld: Matrix4;
+  /** Visually refined pose aligned into the original WebXR metric world. */
+  refinedCameraToWorld?: Matrix4;
+  poseCorrection?: {
+    translationMeters: number;
+    rotationRadians: number;
+  };
+  visualValidation?: {
+    observationCount: number;
+    medianReprojectionErrorPixels: number;
+    p90ReprojectionErrorPixels: number;
+  };
   trackingState: string;
   imageSource?: "xr-camera" | "media-stream";
   imageSynchronized?: boolean;
@@ -93,6 +121,18 @@ export interface CaptureDataset {
   imu: IMUSample[];
   images: Map<string, Blob>;
   depths: Map<string, Blob>;
+  refinement?: DatasetRefinement;
+}
+
+export interface DatasetRefinement {
+  method: string;
+  calibration: CameraCalibration;
+  registeredFrameCount: number;
+  totalFrameCount: number;
+  medianReprojectionErrorPixels: number;
+  p90ReprojectionErrorPixels: number;
+  directTrainReady: boolean;
+  fallbackReason?: string;
 }
 
 export interface CapabilityEntry {

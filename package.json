@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "pointcloud": "vite-node tools/generate-pointcloud.mjs",
+    "benchmark:features": "vite-node tools/benchmark-features.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
