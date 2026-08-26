@@ -41,6 +41,22 @@ M2 test sequence:
 9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, images, optional depth, and IMU samples.
 10. Load the dataset into Brush or another Nerfstudio-compatible reconstruction path.
 
+Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
+
+## Add a seed point cloud to an existing capture
+
+The desktop converter requires ImageMagick's `convert` command. Run it against an extracted capture directory:
+
+```bash
+npm run pointcloud -- /path/to/capture-directory
+```
+
+It creates `pointcloud.ply` and atomically adds `"ply_file_path": "pointcloud.ply"` to `transforms.json`. It refuses to overwrite an existing point cloud unless explicitly requested:
+
+```bash
+npm run pointcloud -- /path/to/capture-directory --force
+```
+
 The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
 
 ## Current limitations
@@ -51,5 +67,7 @@ The production build registers a network-first service worker with offline fallb
 - M0 passed on the target phone with synchronized 886×1920 XR camera JPEGs, 160×90 CPU depth, tracked poses, IMU data, and OPFS reload recovery.
 - M1 passed with a 90-frame chair capture that produced a recognizable, upright reconstruction in Brush. Floaters remain because M1 had no quality selection or seed point cloud.
 - M2 quality thresholds are initial values derived from the accepted chair trajectory. They require calibration on the target phone before M2 is accepted.
+- The first M2 seesaw capture accepted 105 of 118 candidates. Its recorded sharpness score saturated and rejected no frames for blur, so blur normalization still requires correction.
+- A depth-derived seed point cloud is generated during ZIP export. Spirula interoperability still requires a direct import test of the new export.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

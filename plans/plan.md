@@ -1,6 +1,6 @@
 # Project Plan: Open Web 3D Capture
 
-## 0. Implementation status — 25 August 2026
+## 0. Implementation status — 26 August 2026
 
 Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and awaits threshold calibration on the target phone.
 
@@ -25,12 +25,15 @@ Implemented:
 * translation/rotation novelty selection
 * explicit rejection reasons and live quality guidance
 * durable per-candidate `debug/session.jsonl` telemetry
+* depth-to-world back-projection with RGB sampling
+* voxel-downsampled binary RGB `pointcloud.ply` generation during ZIP export
+* Nerfstudio `ply_file_path` export and a desktop converter for existing captures
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (21 tests)
+npm test        PASS (30 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -44,6 +47,16 @@ Hardware and reconstruction evidence:
 * 90-frame synchronized chair capture with 90 valid depth frames
 * approximately 340-degree chair orbit with stable intrinsics and tracked poses
 * recognizable, upright chair reconstruction in Brush web, confirming pose convention
+* 105-frame M2 seesaw capture with valid synchronized RGB, depth, and WebXR poses
+* seesaw depth seed cloud with 153,784 finite colored vertices and plausible world orientation
+* adjacent-frame static-feature checks with approximately 1.1 source-pixel median pose-consistency error
+
+M2 calibration findings:
+
+* 105 of 118 seesaw candidates were accepted; 9 were rejected for motion and 4 as redundant.
+* no candidate was rejected for blur because the current normalized sharpness score compressed into 0.876–0.984.
+* an independent Laplacian measurement found approximately 1.7× variation between the softest and sharpest source frames.
+* visible seesaw duplication is more consistent with motion of the spring-mounted subject plus isolated frame outliers than a global WebXR pose failure.
 
 Required before declaring M2 complete:
 
@@ -52,6 +65,8 @@ Required before declaring M2 complete:
 3. Capture 50–100 accepted frames and inspect `debug/session.jsonl` rejection distributions.
 4. Adjust thresholds if rejection rates or reconstruction quality show systematic errors.
 5. Reconstruct the filtered dataset and compare visible floaters with the M1 chair baseline.
+6. Replace the saturated blur normalization and repeat the sharp/soft-frame rejection test.
+7. A/B test sharp-only, pose-outlier-filtered, and short-time-window subsets before attributing reconstruction duplication to WebXR.
 
 Plan constraints clarified by implementation:
 
@@ -59,6 +74,7 @@ Plan constraints clarified by implementation:
 * `getUserMedia()` frames are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. They remain a diagnostic fallback and are marked as unsynchronized in telemetry.
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
 * Do not begin M3 coverage guidance until M2 thresholds have been exercised on the target phone.
+* M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
 
 ## 1. Objective
 

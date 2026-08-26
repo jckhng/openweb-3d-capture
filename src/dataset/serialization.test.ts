@@ -93,4 +93,33 @@ describe("Nerfstudio serialization", () => {
     };
     expect(serializeDecisionsJsonl([decision])).toBe(`${JSON.stringify(decision)}\n`);
   });
+
+  it("references an included seed point cloud using Nerfstudio convention", () => {
+    const pointCloud = { path: "pointcloud.ply", data: new Uint8Array([1, 2, 3]) };
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-ply",
+        createdAt: "2026-08-26T00:00:00.000Z",
+        updatedAt: "2026-08-26T00:00:00.000Z",
+        captureMode: "object",
+        source: "webxr",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: true,
+        hasImu: false,
+        status: "complete",
+      },
+      frames: [frame],
+      decisions: [],
+      imu: [],
+      images: new Map(),
+      depths: new Map(),
+    };
+    const files = buildDatasetFiles(dataset, pointCloud);
+    const transforms = JSON.parse(files[0].data as string) as Record<string, unknown>;
+    expect(transforms.ply_file_path).toBe("pointcloud.ply");
+    expect(files.at(-1)).toEqual(pointCloud);
+  });
 });

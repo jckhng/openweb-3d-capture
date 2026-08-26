@@ -14,6 +14,7 @@ export interface NerfstudioFrame {
 
 export interface NerfstudioTransforms {
   camera_model: "OPENCV";
+  ply_file_path?: string;
   fl_x?: number;
   fl_y?: number;
   cx?: number;
@@ -25,10 +26,18 @@ export interface NerfstudioTransforms {
 
 export interface DatasetFile {
   path: string;
-  data: string | Blob;
+  data: string | Blob | Uint8Array;
 }
 
-export function buildNerfstudioTransforms(frames: CaptureFrame[]): NerfstudioTransforms {
+export interface PointCloudFile {
+  path: string;
+  data: Uint8Array;
+}
+
+export function buildNerfstudioTransforms(
+  frames: CaptureFrame[],
+  plyFilePath?: string,
+): NerfstudioTransforms {
   const imageFrames = frames.filter((frame) => Boolean(frame.imagePath));
   const first = imageFrames[0];
   const result: NerfstudioTransforms = {
@@ -47,6 +56,7 @@ export function buildNerfstudioTransforms(frames: CaptureFrame[]): NerfstudioTra
     result.w = first.width;
     result.h = first.height;
   }
+  if (plyFilePath) result.ply_file_path = plyFilePath;
 
   return result;
 }
@@ -67,11 +77,11 @@ export function serializeCaptureMetadata(metadata: CaptureMetadata): string {
   return JSON.stringify(metadata, null, 2) + "\n";
 }
 
-export function buildDatasetFiles(dataset: CaptureDataset): DatasetFile[] {
+export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointCloudFile): DatasetFile[] {
   const files: DatasetFile[] = [
     {
       path: "transforms.json",
-      data: JSON.stringify(buildNerfstudioTransforms(dataset.frames), null, 2) + "\n",
+      data: JSON.stringify(buildNerfstudioTransforms(dataset.frames, pointCloud?.path), null, 2) + "\n",
     },
     {
       path: "capture.json",
@@ -93,5 +103,6 @@ export function buildDatasetFiles(dataset: CaptureDataset): DatasetFile[] {
 
   for (const [path, data] of dataset.images) files.push({ path, data });
   for (const [path, data] of dataset.depths) files.push({ path, data });
+  if (pointCloud) files.push(pointCloud);
   return files;
 }
