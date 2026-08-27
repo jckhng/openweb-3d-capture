@@ -11,7 +11,7 @@ export interface ImageFeature {
   scale: number;
   orientation: number;
   descriptor: Uint32Array;
-  gradientDescriptor: Uint8Array;
+  gradientDescriptor?: Uint8Array;
 }
 
 export interface FeatureMatch {
@@ -84,20 +84,57 @@ export function extractImageFeatures(
     );
   }
 
+  return materializeFeatures(candidates, maximumFeatures, true);
+}
+
+/** Capture-phase extractor: one scale and no gradient histogram work. */
+export function extractBriefFeatures(
+  image: GrayImage,
+  options: FeatureOptions = {},
+): ImageFeature[] {
+  validateImage(image);
+  const maximumFeatures = options.maximumFeatures ?? 500;
+  const threshold = options.fastThreshold ?? 18;
+  const cellSize = options.cellSize ?? 12;
+  const cells = new Map<string, PyramidCandidate>();
+  for (let y = BRIEF_RADIUS; y < image.height - BRIEF_RADIUS; y += 1) {
+    for (let x = BRIEF_RADIUS; x < image.width - BRIEF_RADIUS; x += 1) {
+      const score = Math.max(
+        fastScore(image, x, y, threshold),
+        cornerScore(image, x, y, threshold),
+      );
+      if (score > 0) {
+        const key = `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
+        const previous = cells.get(key);
+        if (!previous || score > previous.score) cells.set(key, { x, y, score, scale: 1, level: image });
+      }
+    }
+  }
+  return materializeFeatures([...cells.values()], maximumFeatures, false);
+}
+
+function materializeFeatures(
+  candidates: PyramidCandidate[],
+  maximumFeatures: number,
+  includeGradientDescriptor: boolean,
+): ImageFeature[] {
   return candidates
     .sort((a, b) => b.score - a.score)
     .slice(0, maximumFeatures)
     .map((feature) => {
       const orientation = intensityOrientation(feature.level, feature.x, feature.y);
-      return {
+      const result: ImageFeature = {
         x: feature.x / feature.scale,
         y: feature.y / feature.scale,
         score: feature.score,
         scale: 1 / feature.scale,
         orientation,
         descriptor: briefDescriptor(feature.level, feature.x, feature.y, orientation),
-        gradientDescriptor: gradientDescriptor(feature.level, feature.x, feature.y, orientation),
       };
+      if (includeGradientDescriptor) {
+        result.gradientDescriptor = gradientDescriptor(feature.level, feature.x, feature.y, orientation);
+      }
+      return result;
     });
 }
 
@@ -112,13 +149,17 @@ export function matchScaleInvariantFeatures(
   const candidates: FeatureMatch[] = [];
   const ratioSquared = ratio * ratio;
   for (let indexA = 0; indexA < featuresA.length; indexA += 1) {
+    const descriptorA = featuresA[indexA].gradientDescriptor;
+    if (!descriptorA) continue;
     let bestIndex = -1;
     let bestDistance = Number.POSITIVE_INFINITY;
     let secondDistance = Number.POSITIVE_INFINITY;
     for (let indexB = 0; indexB < featuresB.length; indexB += 1) {
+      const descriptorB = featuresB[indexB].gradientDescriptor;
+      if (!descriptorB) continue;
       const distance = squaredDescriptorDistance(
-        featuresA[indexA].gradientDescriptor,
-        featuresB[indexB].gradientDescriptor,
+        descriptorA,
+        descriptorB,
         secondDistance,
       );
       if (distance < bestDistance) {

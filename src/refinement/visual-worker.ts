@@ -1,4 +1,5 @@
 import {
+  extractBriefFeatures,
   extractImageFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
@@ -33,7 +34,9 @@ interface TrackedFrame {
   sourceHeight: number;
   intrinsics: Intrinsics;
   cameraToWorld: Matrix4;
-  features: ImageFeature[];
+  image: GrayImage;
+  briefFeatures: ImageFeature[];
+  strongFeatures?: ImageFeature[];
 }
 
 const scope = globalThis as unknown as {
@@ -45,6 +48,9 @@ let retained: TrackedFrame[] = [];
 let calibrationObservations: CalibrationObservation[] = [];
 let attemptedPairs = new Set<string>();
 let queue = Promise.resolve();
+let capturePhaseTotalMilliseconds = 0;
+let capturePhaseMaximumFrameMilliseconds = 0;
+let deferredRefinementMilliseconds = 0;
 
 scope.onmessage = (event) => {
   queue = queue.then(async () => {
@@ -53,15 +59,21 @@ scope.onmessage = (event) => {
       retained = [];
       calibrationObservations = [];
       attemptedPairs = new Set();
-      scope.postMessage({ type: "update", report: graph.report() });
+      capturePhaseTotalMilliseconds = 0;
+      capturePhaseMaximumFrameMilliseconds = 0;
+      deferredRefinementMilliseconds = 0;
+      scope.postMessage({ type: "update", report: reportWithProcessing() });
       return;
     }
     if (event.data.type === "track") {
       await trackFrame(event.data.frame);
-      scope.postMessage({ type: "update", report: graph.report() });
+      scope.postMessage({ type: "update", report: reportWithProcessing() });
       return;
     }
+    const deferredStarted = performance.now();
+    addDeferredLoopEdges();
     repairDisconnectedGraph();
+    deferredRefinementMilliseconds = performance.now() - deferredStarted;
     scope.postMessage({
       type: "finished",
       requestId: event.data.requestId,
@@ -76,6 +88,7 @@ scope.onmessage = (event) => {
 };
 
 async function trackFrame(input: VisualTrackingFrameInput): Promise<void> {
+  const started = performance.now();
   graph.addFrame(input.id);
   const image = await decodeGray(input.image, input.width, input.height);
   const frame: TrackedFrame = {
@@ -86,7 +99,8 @@ async function trackFrame(input: VisualTrackingFrameInput): Promise<void> {
     sourceHeight: input.height,
     intrinsics: input.intrinsics,
     cameraToWorld: input.cameraToWorld,
-    features: extractImageFeatures(image, {
+    image,
+    briefFeatures: extractBriefFeatures(image, {
       maximumFeatures: MAXIMUM_FEATURES,
       fastThreshold: 18,
       cellSize: 12,
@@ -95,28 +109,14 @@ async function trackFrame(input: VisualTrackingFrameInput): Promise<void> {
 
   const previous = retained.at(-1);
   if (previous) {
-    let adjacent = matchEdge(previous, frame, "adjacent", "brief");
-    graph.addEdge(adjacent);
-    if (!adjacent.accepted) {
-      adjacent = addStrongEdge(previous, frame, "adjacent");
-      graph.addEdge(adjacent);
-      if (!adjacent.accepted) {
-        for (const offset of [2, 4]) {
-          const recovery = retained.at(-offset);
-          if (recovery) graph.addEdge(addStrongEdge(recovery, frame, "recovery"));
-        }
-      }
-    }
-  }
-
-  if (input.id >= MINIMUM_LOOP_SEPARATION && input.id % 8 === 0) {
-    for (const candidate of loopCandidates(frame, retained, 2)) {
-      graph.addEdge(addStrongEdge(candidate, frame, "loop"));
-    }
+    graph.addEdge(matchEdge(previous, frame, "adjacent", "brief"));
   }
 
   retained.push(frame);
   if (retained.length > MAXIMUM_RETAINED_FRAMES) retained.shift();
+  const elapsed = performance.now() - started;
+  capturePhaseTotalMilliseconds += elapsed;
+  capturePhaseMaximumFrameMilliseconds = Math.max(capturePhaseMaximumFrameMilliseconds, elapsed);
 }
 
 function addStrongEdge(a: TrackedFrame, b: TrackedFrame, kind: VisualTrackingEdge["kind"]): VisualTrackingEdge {
@@ -130,12 +130,14 @@ function matchEdge(
   kind: VisualTrackingEdge["kind"],
   matcher: NonNullable<VisualTrackingEdge["matcher"]>,
 ): VisualTrackingEdge {
+  const featuresA = matcher === "gradient" ? strongFeatures(a) : a.briefFeatures;
+  const featuresB = matcher === "gradient" ? strongFeatures(b) : b.briefFeatures;
   const matches = matcher === "gradient"
-    ? matchScaleInvariantFeatures(a.features, b.features)
-    : matchImageFeatures(a.features, b.features);
+    ? matchScaleInvariantFeatures(featuresA, featuresB)
+    : matchImageFeatures(featuresA, featuresB);
   const pointMatches = matches.map((match) => ({
-    pointA: sourcePoint(a.features[match.featureA], a),
-    pointB: sourcePoint(b.features[match.featureB], b),
+    pointA: sourcePoint(featuresA[match.featureA], a),
+    pointB: sourcePoint(featuresB[match.featureB], b),
   }));
   const geometry = verifyFeatureGeometry(pointMatches, a.sourceWidth, a.sourceHeight);
   const inlierMatches = geometry.inlierIndices.map((index) => pointMatches[index]);
@@ -169,11 +171,32 @@ function matchEdge(
 }
 
 function finalReport() {
-  const report = graph.report();
+  const report = reportWithProcessing();
   if (report.readyForCalibration) {
     report.calibrationEstimate = estimateSharedCalibration(calibrationObservations);
   }
   return report;
+}
+
+function reportWithProcessing() {
+  const report = graph.report();
+  report.processing = {
+    capturePhaseFrames: report.frameCount,
+    capturePhaseTotalMilliseconds,
+    capturePhaseMaximumFrameMilliseconds,
+    deferredRefinementMilliseconds,
+    retainedGrayBytes: retained.reduce((sum, frame) => sum + frame.image.data.byteLength, 0),
+  };
+  return report;
+}
+
+function strongFeatures(frame: TrackedFrame): ImageFeature[] {
+  frame.strongFeatures ??= extractImageFeatures(frame.image, {
+    maximumFeatures: MAXIMUM_FEATURES,
+    fastThreshold: 18,
+    cellSize: 12,
+  });
+  return frame.strongFeatures;
 }
 
 function boundedMatches<T>(values: T[], maximum: number): T[] {
@@ -192,6 +215,16 @@ function loopCandidates(frame: TrackedFrame, candidates: TrackedFrame[], maximum
     .sort((a, b) => a.score - b.score)
     .slice(0, maximum)
     .map(({ candidate }) => candidate);
+}
+
+function addDeferredLoopEdges(): void {
+  for (let index = 0; index < retained.length; index += 1) {
+    const frame = retained[index];
+    if (frame.id < MINIMUM_LOOP_SEPARATION || frame.id % 8 !== 0) continue;
+    for (const candidate of loopCandidates(frame, retained.slice(0, index), 2)) {
+      graph.addEdge(addStrongEdge(candidate, frame, "loop"));
+    }
+  }
 }
 
 function repairDisconnectedGraph(): void {

@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 27 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced a second hardware capture. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. Phone runtime performance and bounded SE(3) correction remain the required bridge to M3.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. A measured phone backpressure regression has been addressed by separating lightweight capture-time tracking from deferred strong refinement. Phone validation of that fix and bounded SE(3) correction remain the required bridge to M3.
 
 Implemented:
 
@@ -43,12 +43,14 @@ Implemented:
 * multi-scale oriented gradient descriptors for recovery and wider-baseline matching
 * RANSAC-inlier-only residual and calibration scoring
 * bounded disconnected-component repair and stricter loop-closure classification
+* capture-time single-scale BRIEF separated from stop-time multi-scale recovery and loop matching
+* bounded retained grayscale memory and capture/deferred worker timing telemetry
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (46 tests)
+npm test        PASS (47 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -83,6 +85,10 @@ Hardware and reconstruction evidence:
 * second-capture bounded shared calibration estimates focal scale 1.0125 and radial k1 0.070, compared with COLMAP's approximately 1.027–1.028 and 0.056; this is useful initialization but not yet accurate enough to replace joint pose/calibration refinement
 * second-capture raw visual graph remains above the direct-train residual gate, so the current export correctly requests pose optimization or downstream SfM
 * the upgraded seesaw replay remains connected but finds no verified loop closure and therefore still requests downstream SfM
+* a 32-frame low-light plush capture exposed a regression from 0.27-second to 4.25-second candidate intervals, producing median adjacent gaps of 46.5 cm and 36.9 degrees and a ten-component phone graph
+* desktop COLMAP still registered 32/32 low-light frames, but required median corrections of 10.9 cm and 6.25 degrees; this dataset is unsuitable as evidence for direct phone training
+* deferred-refinement replay reduces capture-phase work to approximately 41 ms/frame on the 145-frame dataset while preserving 145/145 connectivity and all eight loop closures; only 45 frames require strong descriptors after stop
+* deferred seesaw replay preserves 105/105 connectivity, correctly finds no loop, and upgrades only two frames after stop
 
 M2 calibration findings:
 
@@ -127,7 +133,8 @@ Plan constraints clarified by implementation:
 * M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
 * WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
 * Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
-* The upgraded worker is production-built but not yet measured on the target phone. The second capture supplies a connected graph and independently validated loop closures, permitting a bounded SE(3) prototype; direct-train readiness remains disabled until that optimizer passes residual and correction gates.
+* The upgraded worker is production-built but the deferred phase split is not yet measured on the target phone. Do not start SE(3) work until a deployed capture restores sub-second candidate cadence without losing the connected graph and verified loops.
+* Registration percentage and reprojection error alone can produce a false-positive readiness result when features lie mainly on the background. Add minimum sampling, target-region feature support, and coverage gates before trusting desktop or phone `directTrainReady` for object capture.
 * The current approach is fail-safe but not yet universally reconstruction-robust: it preserves raw data, gates unverified refinement, and falls back to downstream SfM, but fixed-focus WebXR imposes an unrecoverable optical-quality limit for small or close subjects.
 * Do not couple the open dataset schema to one capture frontend. WebXR, an autofocus-photo fallback, and any future native precision frontend must produce the same raw/refined provenance model and downstream-compatible exports.
 
@@ -925,10 +932,12 @@ Offline prototype result:
 
 Next refinement bound:
 
-1. deploy and measure extraction, matching, memory, and thermal behavior on the target phone
-2. implement bounded WebXR-regularized SE(3) corrections using only verified inlier tracks and loop closures
-3. reject the solution unless connectivity is preserved, residuals improve, and translation/rotation corrections remain inside explicit limits
-4. write refined poses separately, run the direct-train readiness gate, and retain downstream SfM whenever optimization is unavailable or rejected
+1. deploy the deferred-refinement build and verify candidate cadence returns below 0.5 seconds on the target phone
+2. record capture-phase maximum/mean time, deferred completion time, retained grayscale bytes, memory, and thermal behavior from a 100–150-frame orbit
+3. require minimum view sampling, target-region feature support, and object coverage in the readiness gate
+4. implement bounded WebXR-regularized SE(3) corrections using only verified inlier tracks and loop closures
+5. reject the solution unless connectivity is preserved, residuals improve, and translation/rotation corrections remain inside explicit limits
+6. write refined poses separately and retain downstream SfM whenever optimization is unavailable or rejected
 
 Do not begin M3 spherical guidance until this validator can expose weak visual connections. M3 guidance should improve pose-graph conditioning, not only fill geometric view bins.
 

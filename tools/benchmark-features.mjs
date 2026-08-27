@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import {
+  extractBriefFeatures,
   extractImageFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
@@ -37,20 +38,42 @@ const decoded = frames.map((frame) => decodeGray(
   frame.height,
 ));
 const extractionStarted = performance.now();
-const features = decoded.map((image) => extractImageFeatures(image, {
-  maximumFeatures: 450,
-  fastThreshold: 18,
-  cellSize: 12,
-}));
+const capturePhaseFrameMilliseconds = [];
+const briefFeatures = decoded.map((image) => {
+  const started = performance.now();
+  const features = extractBriefFeatures(image, {
+    maximumFeatures: 450,
+    fastThreshold: 18,
+    cellSize: 12,
+  });
+  capturePhaseFrameMilliseconds.push(performance.now() - started);
+  return features;
+});
 const matchingStarted = performance.now();
+const strongFeatureCache = new Map();
+const featuresFor = (index, matcher) => {
+  if (matcher === "brief") return briefFeatures[index];
+  let features = strongFeatureCache.get(index);
+  if (!features) {
+    features = extractImageFeatures(decoded[index], {
+      maximumFeatures: 450,
+      fastThreshold: 18,
+      cellSize: 12,
+    });
+    strongFeatureCache.set(index, features);
+  }
+  return features;
+};
 
 const scorePair = ([indexA, indexB, kind, matcher = "brief"]) => {
+  const featuresA = featuresFor(indexA, matcher);
+  const featuresB = featuresFor(indexB, matcher);
   const matches = matcher === "gradient"
-    ? matchScaleInvariantFeatures(features[indexA], features[indexB])
-    : matchImageFeatures(features[indexA], features[indexB]);
+    ? matchScaleInvariantFeatures(featuresA, featuresB)
+    : matchImageFeatures(featuresA, featuresB);
   const pointMatches = matches.map((match) => ({
-    pointA: sourcePoint(features[indexA][match.featureA], decoded[indexA], frames[indexA]),
-    pointB: sourcePoint(features[indexB][match.featureB], decoded[indexB], frames[indexB]),
+    pointA: sourcePoint(featuresA[match.featureA], decoded[indexA], frames[indexA]),
+    pointB: sourcePoint(featuresB[match.featureB], decoded[indexB], frames[indexB]),
   }));
   const verification = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
   const inlierMatches = verification.inlierIndices.map((index) => pointMatches[index]);
@@ -77,8 +100,8 @@ const scorePair = ([indexA, indexB, kind, matcher = "brief"]) => {
     frameA: frames[indexA].id,
     frameB: frames[indexB].id,
     matcher,
-    featuresA: features[indexA].length,
-    featuresB: features[indexB].length,
+    featuresA: featuresA.length,
+    featuresB: featuresB.length,
     matches: matches.length,
     geometry,
     calibrationObservation: {
@@ -116,23 +139,26 @@ const addPair = (definition) => {
   return pair;
 };
 for (let index = 0; index < frames.length - 1; index += 1) {
-  let adjacent = addPair([index, index + 1, "adjacent", "brief"]);
-  if (!adjacent.geometry.accepted) {
-    adjacent = addPair([index, index + 1, "adjacent", "gradient"]);
-    if (!adjacent.geometry.accepted) {
-      for (const offset of [2, 4]) {
-        if (index + 1 - offset >= 0) addPair([index + 1 - offset, index + 1, "recovery", "gradient"]);
-      }
-    }
-  }
+  const started = performance.now();
+  addPair([index, index + 1, "adjacent", "brief"]);
+  capturePhaseFrameMilliseconds[index + 1] += performance.now() - started;
 }
+const capturePhaseCompleted = performance.now();
 for (const pair of loopPairs(frames)) addPair([...pair, "gradient"]);
 repairDisconnectedGraph();
+const deferredRefinementCompleted = performance.now();
 
 const usable = pairReports.filter((pair) => pair.matches >= 12);
 const adjacentUsable = usable.filter((pair) => pair.kind === "adjacent");
 const loopUsable = usable.filter((pair) => pair.kind === "loop");
 const visualTracking = graph.report();
+visualTracking.processing = {
+  capturePhaseFrames: frames.length,
+  capturePhaseTotalMilliseconds: capturePhaseCompleted - extractionStarted,
+  capturePhaseMaximumFrameMilliseconds: Math.max(0, ...capturePhaseFrameMilliseconds),
+  deferredRefinementMilliseconds: deferredRefinementCompleted - capturePhaseCompleted,
+  retainedGrayBytes: decoded.reduce((sum, image) => sum + image.data.byteLength, 0),
+};
 if (visualTracking.readyForCalibration) {
   visualTracking.calibrationEstimate = estimateSharedCalibration(
     pairReports
@@ -150,18 +176,23 @@ const report = {
   configuration: {
     maximumDimension: 480,
     maximumFeatures: 450,
-    descriptor: "multi-scale FAST/Shi-Tomasi + oriented BRIEF-256 + gradient-128 fallback",
-    matcher: "mutual Hamming 0.8; unique gradient L2 0.78 for repair/loops",
+    descriptor: "capture: single-scale oriented BRIEF-256; stop-time: multi-scale gradient-128",
+    matcher: "capture-phase mutual Hamming 0.8; deferred unique gradient L2 0.78 for repair/loops",
     minimumUsableMatches: 12,
   },
   frames: frames.length,
-  meanFeatures: mean(features.map((value) => value.length)),
+  meanFeatures: mean(briefFeatures.map((value) => value.length)),
+  meanStrongFeatures: mean([...strongFeatureCache.values()].map((value) => value.length)),
+  strongFeatureFrames: strongFeatureCache.size,
   pairs: pairReports.length,
   usablePairs: usable.length,
   usableAdjacentPairs: adjacentUsable.length,
   usableLoopPairs: loopUsable.length,
   timingsMilliseconds: {
     desktopDecode: extractionStarted - decodeStarted,
+    capturePhaseBriefExtraction: matchingStarted - extractionStarted,
+    capturePhaseBriefMatchingAndScoring: capturePhaseCompleted - matchingStarted,
+    deferredStrongRefinement: deferredRefinementCompleted - capturePhaseCompleted,
     workerSafeExtraction: matchingStarted - extractionStarted,
     workerSafeMatchingAndScoring: completed - matchingStarted,
   },

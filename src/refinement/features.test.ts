@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractImageFeatures,
+  extractBriefFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
   type GrayImage,
@@ -37,12 +38,19 @@ function texture(shiftX = 0): GrayImage {
 }
 
 describe("low-resolution feature tracking", () => {
+  it("supports a lightweight single-scale capture phase", () => {
+    const features = extractBriefFeatures(checkerboard(), { maximumFeatures: 100, cellSize: 8 });
+    expect(features.length).toBeGreaterThan(20);
+    expect(features.every((feature) => feature.scale === 1)).toBe(true);
+    expect(features.every((feature) => feature.gradientDescriptor === undefined)).toBe(true);
+  });
+
   it("extracts spatially distributed multi-scale FAST/BRIEF features", () => {
     const features = extractImageFeatures(checkerboard(), { maximumFeatures: 100, cellSize: 8 });
     expect(features.length).toBeGreaterThan(20);
     expect(features.length).toBeLessThanOrEqual(100);
     expect(features.every((feature) => feature.descriptor.length === 8)).toBe(true);
-    expect(features.every((feature) => feature.gradientDescriptor.length === 128)).toBe(true);
+    expect(features.every((feature) => feature.gradientDescriptor?.length === 128)).toBe(true);
     expect(features.every((feature) => Number.isFinite(feature.orientation))).toBe(true);
     expect(features.some((feature) => feature.scale > 1)).toBe(true);
   });

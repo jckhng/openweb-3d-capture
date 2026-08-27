@@ -236,6 +236,28 @@ export function App() {
           <Metric label="visual components" value={snapshot.visualTracking.componentCount} />
           <Metric label="loop closures" value={snapshot.visualTracking.loopClosures} />
           <Metric
+            label="capture worker mean"
+            value={formatWorkerMean(snapshot.visualTracking)}
+          />
+          <Metric
+            label="capture worker max"
+            value={snapshot.visualTracking.processing
+              ? `${snapshot.visualTracking.processing.capturePhaseMaximumFrameMilliseconds.toFixed(0)} ms`
+              : "unavailable"}
+          />
+          <Metric
+            label="deferred refinement"
+            value={snapshot.visualTracking.processing
+              ? `${(snapshot.visualTracking.processing.deferredRefinementMilliseconds / 1000).toFixed(1)} s`
+              : "unavailable"}
+          />
+          <Metric
+            label="retained grayscale"
+            value={snapshot.visualTracking.processing
+              ? `${(snapshot.visualTracking.processing.retainedGrayBytes / 1024 / 1024).toFixed(1)} MB`
+              : "unavailable"}
+          />
+          <Metric
             label="global optimization gate"
             value={snapshot.visualTracking.readyForGlobalOptimization ? "graph ready" : "downstream SfM required"}
           />
@@ -359,6 +381,12 @@ function formatNumber(value?: number) {
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+function formatWorkerMean(report: DiagnosticSnapshot["visualTracking"]) {
+  const processing = report.processing;
+  if (!processing || processing.capturePhaseFrames === 0) return "unavailable";
+  return `${(processing.capturePhaseTotalMilliseconds / processing.capturePhaseFrames).toFixed(0)} ms`;
 }
 
 function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision"]) {

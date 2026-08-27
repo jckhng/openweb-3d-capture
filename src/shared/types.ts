@@ -173,6 +173,13 @@ export interface VisualTrackingReport {
     initialMedianResidualPixels: number;
     estimatedMedianResidualPixels: number;
   };
+  processing?: {
+    capturePhaseFrames: number;
+    capturePhaseTotalMilliseconds: number;
+    capturePhaseMaximumFrameMilliseconds: number;
+    deferredRefinementMilliseconds: number;
+    retainedGrayBytes: number;
+  };
   edges: VisualTrackingEdge[];
 }
 
