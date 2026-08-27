@@ -3,6 +3,7 @@ import { QualityKeyframeSelector } from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
 import { scoreLaplacianSharpness } from "../quality/sharpness";
 import { medianCenterDepth } from "../quality/focus-distance";
+import { IncrementalVisualTracker, unavailableReport } from "../refinement/visual-tracker";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
 import type {
   CaptureDecision,
@@ -12,6 +13,7 @@ import type {
   CaptureMetadata,
   Intrinsics,
   Matrix4,
+  VisualTrackingReport,
 } from "../shared/types";
 import { makeCaptureId } from "../storage/storage";
 import type { CapturePersistence } from "../storage/storage";
@@ -95,6 +97,7 @@ export interface DiagnosticSnapshot {
   captureMode?: "diagnostic" | "object";
   captureProgress: { current: number; target?: number };
   captureQuality: CaptureQualityTelemetry;
+  visualTracking: VisualTrackingReport;
   lastCaptureId?: string;
   lastImageStatus: string;
   lastError?: string;
@@ -107,6 +110,7 @@ export class XRDiagnosticController {
   private readonly listeners = new Set<Listener>();
   private readonly canvas: HTMLCanvasElement;
   private readonly qualityCanvas: HTMLCanvasElement;
+  private readonly visualTracker: IncrementalVisualTracker;
   private readonly snapshot: DiagnosticSnapshot = {
     running: false,
     xrFps: 0,
@@ -116,6 +120,7 @@ export class XRDiagnosticController {
     imuStatus: "not started",
     captureProgress: { current: 0 },
     captureQuality: createQualityTelemetry(),
+    visualTracking: unavailableReport("waiting for object capture"),
     lastImageStatus: "not attempted",
   };
   private session?: XRSession;
@@ -144,6 +149,10 @@ export class XRDiagnosticController {
     this.qualityCanvas = document.createElement("canvas");
     this.qualityCanvas.width = 128;
     this.qualityCanvas.height = 128;
+    this.visualTracker = new IncrementalVisualTracker((report) => {
+      this.snapshot.visualTracking = report;
+      this.emit();
+    });
   }
 
   subscribe(listener: Listener): () => void {
@@ -162,6 +171,10 @@ export class XRDiagnosticController {
       ...this.snapshot,
       captureProgress: { ...this.snapshot.captureProgress },
       captureQuality: { ...this.snapshot.captureQuality },
+      visualTracking: {
+        ...this.snapshot.visualTracking,
+        edges: this.snapshot.visualTracking.edges.map((edge) => ({ ...edge })),
+      },
       pose: this.snapshot.pose?.map((row) => [...row]),
       projectionMatrix: this.snapshot.projectionMatrix ? [...this.snapshot.projectionMatrix] : undefined,
       intrinsics: this.snapshot.intrinsics ? { ...this.snapshot.intrinsics } : undefined,
@@ -302,6 +315,7 @@ export class XRDiagnosticController {
     this.snapshot.captureMode = captureMode;
     this.snapshot.captureProgress = { current: 0, target };
     this.snapshot.captureQuality = createQualityTelemetry();
+    this.visualTracker.reset();
     this.snapshot.lastError = undefined;
     this.emit();
   }
@@ -340,6 +354,7 @@ export class XRDiagnosticController {
     this.rawStream = undefined;
     this.rawVideo = undefined;
     this.destroyCameraReadPipeline();
+    this.visualTracker.dispose();
     this.listeners.clear();
   }
 
@@ -481,6 +496,16 @@ export class XRDiagnosticController {
     };
 
     await this.persistence.appendFrame(active.id, frame, image?.blob, input.depth?.blob);
+    if (active.selector && image?.source === "xr-camera") {
+      this.visualTracker.track({
+        id,
+        image: image.blob,
+        width: outputWidth,
+        height: outputHeight,
+        intrinsics,
+        cameraToWorld: input.cameraToWorld,
+      });
+    }
     active.frames += 1;
     active.metadata.frameCount = active.frames;
     active.metadata.hasDepth ||= Boolean(input.depth);
@@ -722,6 +747,11 @@ export class XRDiagnosticController {
   private async finalizeActiveCapture(active: ActiveCapture, status: "complete" | "incomplete"): Promise<void> {
     const samples = this.imu.getSamples(active.imuStartIndex);
     await this.persistence.appendImu(active.id, samples);
+    if (active.selector) {
+      const visualTracking = await this.visualTracker.finish();
+      await this.persistence.saveVisualTracking(active.id, visualTracking);
+      this.snapshot.visualTracking = visualTracking;
+    }
     await this.persistence.finalizeCapture(active.id, {
       ...active.metadata,
       frameCount: active.frames,

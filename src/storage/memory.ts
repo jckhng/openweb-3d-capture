@@ -4,6 +4,7 @@ import type {
   CaptureFrame,
   CaptureMetadata,
   IMUSample,
+  VisualTrackingReport,
 } from "../shared/types";
 import type { CapturePersistence } from "./storage";
 
@@ -41,6 +42,10 @@ export class MemoryCaptureStore implements CapturePersistence {
     dataset.capture.hasImu ||= samples.length > 0;
   }
 
+  async saveVisualTracking(captureId: string, report: VisualTrackingReport): Promise<void> {
+    this.require(captureId).visualTracking = structuredClone(report);
+  }
+
   async finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void> {
     const dataset = this.require(captureId);
     dataset.capture = { ...metadata };
@@ -55,6 +60,7 @@ export class MemoryCaptureStore implements CapturePersistence {
       imu: structuredClone(dataset.imu),
       images: new Map(dataset.images),
       depths: new Map(dataset.depths),
+      visualTracking: dataset.visualTracking ? structuredClone(dataset.visualTracking) : undefined,
     };
   }
 

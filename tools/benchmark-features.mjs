@@ -5,6 +5,9 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { extractImageFeatures, matchImageFeatures } from "../src/refinement/features.ts";
 import { scoreEpipolarConsistency } from "../src/refinement/reprojection.ts";
+import { VisualConnectivityGraph } from "../src/refinement/visual-graph.ts";
+import { verifyFeatureGeometry } from "../src/refinement/geometric-verification.ts";
+import { estimateSharedCalibration } from "../src/refinement/calibration-estimator.ts";
 
 const arguments_ = process.argv.slice(2);
 const outputIndex = arguments_.indexOf("--output");
@@ -39,7 +42,7 @@ const matchingStarted = performance.now();
 
 const pairs = adjacentPairs(frames.length);
 for (const pair of loopPairs(frames, 8)) pairs.push(pair);
-const pairReports = pairs.map(([indexA, indexB, kind]) => {
+const scorePair = ([indexA, indexB, kind]) => {
   const matches = matchImageFeatures(features[indexA], features[indexB]);
   const pointMatches = matches.map((match) => ({
     pointA: sourcePoint(features[indexA][match.featureA], decoded[indexA], frames[indexA]),
@@ -51,6 +54,7 @@ const pairReports = pairs.map(([indexA, indexB, kind]) => {
     frames[indexB].webxrCameraToWorld ?? frames[indexB].cameraToWorld,
     frames[indexA].intrinsics,
   );
+  const geometry = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
   let refined;
   if (frames[indexA].refinedCameraToWorld && frames[indexB].refinedCameraToWorld && refinement) {
     refined = scoreEpipolarConsistency(
@@ -68,14 +72,52 @@ const pairReports = pairs.map(([indexA, indexB, kind]) => {
     featuresA: features[indexA].length,
     featuresB: features[indexB].length,
     matches: matches.length,
+    geometry,
+    calibrationObservation: {
+      matches: pointMatches.length <= 64
+        ? pointMatches
+        : Array.from({ length: 64 }, (_, index) => pointMatches[Math.floor(index * pointMatches.length / 64)]),
+      cameraToWorldA: frames[indexA].webxrCameraToWorld ?? frames[indexA].cameraToWorld,
+      cameraToWorldB: frames[indexB].webxrCameraToWorld ?? frames[indexB].cameraToWorld,
+      intrinsics: frames[indexA].intrinsics,
+    },
     raw,
     refined,
   };
-});
+};
+const pairReports = pairs.map(scorePair);
+for (const adjacent of [...pairReports].filter((pair) => pair.kind === "adjacent")) {
+  if (adjacent.geometry.accepted) continue;
+  for (const offset of [2, 4]) {
+    const indexB = adjacent.frameB;
+    const indexA = indexB - offset;
+    if (indexA >= 0) pairReports.push(scorePair([indexA, indexB, "recovery"]));
+  }
+}
 
 const usable = pairReports.filter((pair) => pair.matches >= 12);
 const adjacentUsable = usable.filter((pair) => pair.kind === "adjacent");
 const loopUsable = usable.filter((pair) => pair.kind === "loop");
+const graph = new VisualConnectivityGraph();
+for (const frame of frames) graph.addFrame(frame.id);
+for (const pair of pairReports) graph.addEdge({
+  frameA: pair.frameA,
+  frameB: pair.frameB,
+  kind: pair.kind,
+  matches: pair.matches,
+  geometricInliers: pair.geometry.inliers,
+  geometricInlierRatio: pair.geometry.inlierRatio,
+  medianResidualPixels: pair.raw.medianPixels,
+  p90ResidualPixels: pair.raw.p90Pixels,
+  accepted: pair.geometry.accepted,
+});
+const visualTracking = graph.report();
+if (visualTracking.readyForCalibration) {
+  visualTracking.calibrationEstimate = estimateSharedCalibration(
+    pairReports.filter((pair) => pair.geometry.accepted).map((pair) => pair.calibrationObservation),
+  );
+}
+for (const pair of pairReports) delete pair.calibrationObservation;
 const completed = performance.now();
 const report = {
   format: "open3dcapture-feature-benchmark",
@@ -84,7 +126,7 @@ const report = {
   configuration: {
     maximumDimension: 480,
     maximumFeatures: 450,
-    descriptor: "FAST/Shi-Tomasi + BRIEF-256",
+    descriptor: "FAST/Shi-Tomasi + oriented BRIEF-256",
     matcher: "mutual Hamming + ratio 0.8",
     minimumUsableMatches: 12,
   },
@@ -101,6 +143,7 @@ const report = {
   },
   rawMedianPairResidualPixels: median(adjacentUsable.map((pair) => pair.raw.medianPixels)),
   refinedMedianPairResidualPixels: median(adjacentUsable.map((pair) => pair.refined?.medianPixels).filter(Number.isFinite)),
+  visualTracking,
   pairReports,
 };
 const serialized = `${JSON.stringify(report, null, 2)}\n`;

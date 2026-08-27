@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 27 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented, recalibrated from the first target-phone dataset, and awaits a second hardware capture. The first offline reconstruction-readiness prototype is implemented; phone integration, shared calibration optimization, pose correction, and loop closure remain the required bridge to M3.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented, recalibrated from the first target-phone dataset, and awaits a second hardware capture. Incremental phone-worker visual tracking and bounded shared calibration are implemented and validated by seesaw replay. Phone hardware performance, loop closure, and gated SE(3) correction remain the required bridge to M3.
 
 Implemented:
 
@@ -35,12 +35,17 @@ Implemented:
 * portable Spirula/Nerfstudio and LichtFeld/COLMAP benchmark preparation tool
 * isolated PyCOLMAP 4.1.1 refinement environment without replacing system COLMAP 3.6
 * worker-safe low-resolution corner/BRIEF feature extraction, matching, and pose residual scoring prototype
+* dedicated incremental browser worker for accepted synchronized frames
+* pose-independent geometric edge verification and recovery matching
+* persisted visual connectivity/readiness report with explicit downstream-SfM fallback
+* bounded shared focal-scale and radial-distortion estimation
+* hard gate preventing global pose optimization without a loop closure
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (39 tests)
+npm test        PASS (45 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -63,7 +68,11 @@ Hardware and reconstruction evidence:
 * refined poses remain aligned to the WebXR metric world and depth seed point cloud
 * all 104 adjacent low-resolution feature pairs are usable; median pair residual improves from 1.07 pixels raw to 0.82 pixels refined
 * zero of eight proposed non-adjacent pairs pass the initial loop-closure match floor
-* worker-safe processing of all 105 low-resolution frames takes 4.63 seconds for extraction and 1.88 seconds for matching/scoring on the development desktop; phone performance remains unmeasured
+* worker-safe processing of all 105 low-resolution frames takes 5.08 seconds for extraction and 2.43 seconds for geometric matching, scoring, and shared calibration on the development desktop; phone performance remains unmeasured
+* pose-independent replay connects 105/105 frames through 104 accepted visual edges, including one recovery edge
+* raw visual graph residual is 1.09 pixels median and 5.09 pixels p90, indicating correction is required
+* shared calibration replay estimates focal scale 1.0175 and radial k1 0.040; median residual falls to 0.96 pixels
+* the reference COLMAP solution is approximately focal scale 1.0155 and radial k1 0.0548
 
 M2 calibration findings:
 
@@ -104,7 +113,7 @@ Plan constraints clarified by implementation:
 * M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
 * WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
 * Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
-* The current feature prototype validates adjacent connectivity but is not a phone runtime result. Loop-closure descriptors and candidate selection must improve before it can support optimization.
+* The worker implementation is production-built but not yet a phone runtime result. Loop-closure descriptors and candidate selection must improve before global pose optimization is allowed.
 
 ## 1. Objective
 
@@ -743,12 +752,15 @@ Offline prototype result:
 * PyCOLMAP 4.1.1 registers 105/105 seesaw frames with 0.63-pixel median and 1.75-pixel p90 observation residual
 * the TypeScript low-resolution tracker connects every adjacent pair and measures lower residual for refined poses
 * the initial BRIEF loop candidates do not produce enough matches; do not start pose optimization from this graph yet
+* pose-independent RANSAC plus recovery edges connect the complete sequence without trusting WebXR residuals as the connectivity test
+* bounded focal-scale/k1 estimation recovers the direction and magnitude of the independent COLMAP calibration
 
 Next refinement bound:
 
-1. run extraction incrementally in a browser worker on accepted phone frames
+1. validate extraction, matching, memory, and thermal behavior on the target phone
 2. replace or augment BRIEF for wider-baseline loop matching
-3. require a connected visual graph before optimizing shared calibration or SE(3) corrections
+3. add small WebXR-regularized SE(3) corrections only after a verified loop closure
+4. retain downstream SfM as the mandatory fallback when global optimization is gated off
 
 Do not begin M3 spherical guidance until this validator can expose weak visual connections. M3 guidance should improve pose-graph conditioning, not only fill geometric view bins.
 

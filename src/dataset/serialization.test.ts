@@ -239,4 +239,48 @@ describe("Nerfstudio serialization", () => {
     expect(main.frames[0].transform_matrix).toEqual(frame.cameraToWorld);
     expect(main.frames[0].transform_matrix_source).toBe("webxr");
   });
+
+  it("exports the incremental visual tracking report without claiming refined poses", () => {
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-tracking",
+        createdAt: "2026-08-27T00:00:00.000Z",
+        updatedAt: "2026-08-27T00:00:00.000Z",
+        captureMode: "object",
+        source: "webxr",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames: [frame],
+      decisions: [],
+      imu: [],
+      images: new Map(),
+      depths: new Map(),
+      visualTracking: {
+        format: "open3dcapture-visual-tracking",
+        version: 1,
+        state: "calibration-ready",
+        frameCount: 10,
+        connectedFrameCount: 10,
+        componentCount: 1,
+        loopClosures: 0,
+        medianResidualPixels: 0.8,
+        p90ResidualPixels: 2,
+        readyForCalibration: true,
+        readyForGlobalOptimization: false,
+        directTrainReady: false,
+        fallbackReason: "visual graph passes; calibration and pose optimization have not run",
+        edges: [],
+      },
+    };
+    const files = buildDatasetFiles(dataset);
+    expect(files.map((file) => file.path)).toContain("refinement/tracking.json");
+    const transforms = JSON.parse(files.find((file) => file.path === "transforms.json")!.data as string);
+    expect(transforms.frames[0].transform_matrix).toEqual(frame.cameraToWorld);
+  });
 });

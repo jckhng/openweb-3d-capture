@@ -8,6 +8,8 @@ export interface ImageFeature {
   x: number;
   y: number;
   score: number;
+  scale: number;
+  orientation: number;
   descriptor: Uint32Array;
 }
 
@@ -41,7 +43,7 @@ export function extractImageFeatures(
   const maximumFeatures = options.maximumFeatures ?? 500;
   const threshold = options.fastThreshold ?? 18;
   const cellSize = options.cellSize ?? 12;
-  const candidates: Array<Omit<ImageFeature, "descriptor">> = [];
+  const candidates: Array<Pick<ImageFeature, "x" | "y" | "score">> = [];
 
   for (let y = BRIEF_RADIUS; y < image.height - BRIEF_RADIUS; y += 1) {
     for (let x = BRIEF_RADIUS; x < image.width - BRIEF_RADIUS; x += 1) {
@@ -53,7 +55,7 @@ export function extractImageFeatures(
     }
   }
 
-  const cells = new Map<string, Omit<ImageFeature, "descriptor">>();
+  const cells = new Map<string, Pick<ImageFeature, "x" | "y" | "score">>();
   for (const candidate of candidates) {
     const key = `${Math.floor(candidate.x / cellSize)}:${Math.floor(candidate.y / cellSize)}`;
     const previous = cells.get(key);
@@ -63,10 +65,15 @@ export function extractImageFeatures(
   return [...cells.values()]
     .sort((a, b) => b.score - a.score)
     .slice(0, maximumFeatures)
-    .map((feature) => ({
-      ...feature,
-      descriptor: briefDescriptor(image, feature.x, feature.y),
-    }));
+    .map((feature) => {
+      const orientation = intensityOrientation(image, feature.x, feature.y);
+      return {
+        ...feature,
+        scale: 1,
+        orientation,
+        descriptor: briefDescriptor(image, feature.x, feature.y, orientation),
+      };
+    });
 }
 
 export function matchImageFeatures(
@@ -153,15 +160,40 @@ function cornerScore(image: GrayImage, x: number, y: number, threshold: number):
   return minimumEigenvalue > threshold * threshold * 4 ? minimumEigenvalue : 0;
 }
 
-function briefDescriptor(image: GrayImage, x: number, y: number): Uint32Array {
+function briefDescriptor(
+  image: GrayImage,
+  x: number,
+  y: number,
+  orientation: number,
+): Uint32Array {
   const words = new Uint32Array(8);
+  const cosine = Math.cos(orientation);
+  const sine = Math.sin(orientation);
   for (let bit = 0; bit < BRIEF_PAIRS.length; bit += 1) {
     const [ax, ay, bx, by] = BRIEF_PAIRS[bit];
-    const first = image.data[(y + ay) * image.width + x + ax];
-    const second = image.data[(y + by) * image.width + x + bx];
+    const rotatedAx = Math.round(cosine * ax - sine * ay);
+    const rotatedAy = Math.round(sine * ax + cosine * ay);
+    const rotatedBx = Math.round(cosine * bx - sine * by);
+    const rotatedBy = Math.round(sine * bx + cosine * by);
+    const first = image.data[(y + rotatedAy) * image.width + x + rotatedAx];
+    const second = image.data[(y + rotatedBy) * image.width + x + rotatedBx];
     if (first < second) words[bit >>> 5] |= (1 << (bit & 31)) >>> 0;
   }
   return words;
+}
+
+function intensityOrientation(image: GrayImage, x: number, y: number): number {
+  let horizontalMoment = 0;
+  let verticalMoment = 0;
+  for (let offsetY = -BRIEF_RADIUS; offsetY <= BRIEF_RADIUS; offsetY += 1) {
+    for (let offsetX = -BRIEF_RADIUS; offsetX <= BRIEF_RADIUS; offsetX += 1) {
+      if (offsetX * offsetX + offsetY * offsetY > BRIEF_RADIUS * BRIEF_RADIUS) continue;
+      const intensity = image.data[(y + offsetY) * image.width + x + offsetX];
+      horizontalMoment += offsetX * intensity;
+      verticalMoment += offsetY * intensity;
+    }
+  }
+  return Math.atan2(verticalMoment, horizontalMoment);
 }
 
 function hammingDistance(a: Uint32Array, b: Uint32Array): number {

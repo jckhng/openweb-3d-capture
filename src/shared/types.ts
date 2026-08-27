@@ -122,6 +122,7 @@ export interface CaptureDataset {
   images: Map<string, Blob>;
   depths: Map<string, Blob>;
   refinement?: DatasetRefinement;
+  visualTracking?: VisualTrackingReport;
 }
 
 export interface DatasetRefinement {
@@ -133,6 +134,45 @@ export interface DatasetRefinement {
   p90ReprojectionErrorPixels: number;
   directTrainReady: boolean;
   fallbackReason?: string;
+}
+
+export interface VisualTrackingEdge {
+  frameA: number;
+  frameB: number;
+  kind: "adjacent" | "recovery" | "loop";
+  matches: number;
+  geometricInliers?: number;
+  geometricInlierRatio?: number;
+  medianResidualPixels: number;
+  p90ResidualPixels: number;
+  accepted: boolean;
+}
+
+export interface VisualTrackingReport {
+  format: "open3dcapture-visual-tracking";
+  version: 1;
+  state: "unavailable" | "collecting" | "weak" | "calibration-ready";
+  frameCount: number;
+  connectedFrameCount: number;
+  componentCount: number;
+  loopClosures: number;
+  medianResidualPixels: number;
+  p90ResidualPixels: number;
+  readyForCalibration: boolean;
+  readyForGlobalOptimization: boolean;
+  directTrainReady: false;
+  fallbackReason: string;
+  calibrationEstimate?: {
+    model: "FOCAL_SCALE_K1";
+    observationEdges: number;
+    observationMatches: number;
+    focalScale: number;
+    intrinsics: Intrinsics;
+    distortion: LensDistortion;
+    initialMedianResidualPixels: number;
+    estimatedMedianResidualPixels: number;
+  };
+  edges: VisualTrackingEdge[];
 }
 
 export interface CapabilityEntry {

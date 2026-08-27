@@ -4,6 +4,7 @@ import type {
   CaptureFrame,
   CaptureMetadata,
   IMUSample,
+  VisualTrackingReport,
 } from "../shared/types";
 import type { CapturePersistence } from "./storage";
 
@@ -21,6 +22,7 @@ export class OPFSCaptureStore implements CapturePersistence {
     await directory.getDirectoryHandle("depth", { create: true });
     await directory.getDirectoryHandle("telemetry", { create: true });
     await directory.getDirectoryHandle("debug", { create: true });
+    await directory.getDirectoryHandle("refinement", { create: true });
     await writeJson(directory, "capture.json", metadata);
   }
 
@@ -63,6 +65,12 @@ export class OPFSCaptureStore implements CapturePersistence {
     metadata.hasImu = true;
     metadata.updatedAt = new Date().toISOString();
     await writeJson(directory, "capture.json", metadata);
+  }
+
+  async saveVisualTracking(captureId: string, report: VisualTrackingReport): Promise<void> {
+    const directory = await this.captureDirectory(captureId);
+    const refinement = await directory.getDirectoryHandle("refinement", { create: true });
+    await writeJson(refinement, "tracking.json", report);
   }
 
   async finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void> {
@@ -117,7 +125,14 @@ export class OPFSCaptureStore implements CapturePersistence {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line) as IMUSample);
-    return { capture, frames, decisions, imu, images, depths };
+    let visualTracking: VisualTrackingReport | undefined;
+    try {
+      const refinement = await directory.getDirectoryHandle("refinement");
+      visualTracking = await readJson<VisualTrackingReport>(refinement, "tracking.json");
+    } catch {
+      // Captures created before incremental visual tracking have no report.
+    }
+    return { capture, frames, decisions, imu, images, depths, visualTracking };
   }
 
   async listCaptures(): Promise<CaptureMetadata[]> {

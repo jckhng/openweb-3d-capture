@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractImageFeatures, matchImageFeatures, type GrayImage } from "./features";
+import {
+  extractImageFeatures,
+  matchImageFeatures,
+  type GrayImage,
+} from "./features";
 
 function checkerboard(shiftX = 0): GrayImage {
   const width = 80;
@@ -37,6 +41,7 @@ describe("low-resolution feature tracking", () => {
     expect(features.length).toBeGreaterThan(20);
     expect(features.length).toBeLessThanOrEqual(100);
     expect(features.every((feature) => feature.descriptor.length === 8)).toBe(true);
+    expect(features.every((feature) => Number.isFinite(feature.orientation))).toBe(true);
   });
 
   it("matches translated image features with mutual ratio filtering", () => {
@@ -49,4 +54,5 @@ describe("low-resolution feature tracking", () => {
       .sort((a, b) => a - b)[Math.floor(matches.length / 2)];
     expect(medianShift).toBe(2);
   });
+
 });

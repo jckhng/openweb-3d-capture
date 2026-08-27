@@ -150,6 +150,13 @@ export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointClo
     },
   ];
 
+  if (dataset.visualTracking) {
+    files.push({
+      path: "refinement/tracking.json",
+      data: JSON.stringify(dataset.visualTracking, null, 2) + "\n",
+    });
+  }
+
   if (dataset.refinement) {
     files.push({
       path: "transforms_webxr.json",

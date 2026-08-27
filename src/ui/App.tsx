@@ -228,6 +228,38 @@ export function App() {
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
           <Metric label="motion score" value={formatPercent(snapshot.captureQuality.motionScore)} />
           <Metric label="novelty score" value={formatPercent(snapshot.captureQuality.noveltyScore)} />
+          <Metric label="visual graph" value={snapshot.visualTracking.state} />
+          <Metric
+            label="visually connected"
+            value={`${snapshot.visualTracking.connectedFrameCount} / ${snapshot.visualTracking.frameCount}`}
+          />
+          <Metric label="visual components" value={snapshot.visualTracking.componentCount} />
+          <Metric label="loop closures" value={snapshot.visualTracking.loopClosures} />
+          <Metric
+            label="global optimization"
+            value={snapshot.visualTracking.readyForGlobalOptimization ? "ready" : "downstream SfM required"}
+          />
+          <Metric
+            label="visual median residual"
+            value={`${snapshot.visualTracking.medianResidualPixels.toFixed(2)} px`}
+          />
+          <Metric
+            label="visual p90 residual"
+            value={`${snapshot.visualTracking.p90ResidualPixels.toFixed(2)} px`}
+          />
+          <Metric
+            label="estimated focal scale"
+            value={snapshot.visualTracking.calibrationEstimate
+              ? snapshot.visualTracking.calibrationEstimate.focalScale.toFixed(4)
+              : "not estimated"}
+          />
+          <Metric
+            label="estimated radial k1"
+            value={snapshot.visualTracking.calibrationEstimate
+              ? snapshot.visualTracking.calibrationEstimate.distortion.k1.toFixed(4)
+              : "not estimated"}
+          />
+          <Metric label="visual fallback" value={snapshot.visualTracking.fallbackReason} />
           <Metric label="linear velocity" value={`${snapshot.captureQuality.linearVelocity.toFixed(3)} m/s`} />
           <Metric
             label="angular velocity"

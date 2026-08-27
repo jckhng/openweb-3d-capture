@@ -102,6 +102,9 @@ The production build registers a network-first service worker with offline fallb
 - Web v1 should be treated as a medium-object capture path until the 45 cm floor and minimum usable object size are measured on the target phone. Reliable close-range small-object capture likely requires a native Android path with camera focus control.
 - WebXR poses are retained as metric priors, not assumed to be reconstruction-grade final poses. The rigid seesaw dataset registered completely in COLMAP, while visual refinement found pose, focal-length, and lens-distortion corrections. An on-phone readiness validator/refiner is the next implementation bound.
 - Dual-pose serialization and a low-resolution TypeScript feature/reprojection prototype are implemented. The seesaw benchmark connects all 104 adjacent pairs and improves median pair residual from 1.07 px with WebXR poses to 0.82 px with refined poses. The first BRIEF prototype does not yet establish a usable loop closure.
+- The low-resolution tracker now runs incrementally in a dedicated browser worker on accepted synchronized frames and persists `refinement/tracking.json`. Pose-independent geometric verification and recovery edges connect 105/105 seesaw frames in replay.
+- Bounded shared calibration estimates focal scale 1.0175 and radial `k1` 0.040 on the seesaw replay, close to COLMAP's approximately 1.0155 and 0.0548. It reduces raw-pose median residual from 1.09 px to 0.96 px.
+- No loop closure is found in the seesaw replay. Global SE(3) pose optimization and direct-train readiness therefore remain disabled; export must use downstream SfM refinement.
 - A depth-derived seed point cloud is generated during ZIP export. Spirula interoperability still requires a direct import test of the new export.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.
