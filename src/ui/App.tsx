@@ -236,8 +236,8 @@ export function App() {
           <Metric label="visual components" value={snapshot.visualTracking.componentCount} />
           <Metric label="loop closures" value={snapshot.visualTracking.loopClosures} />
           <Metric
-            label="global optimization"
-            value={snapshot.visualTracking.readyForGlobalOptimization ? "ready" : "downstream SfM required"}
+            label="global optimization gate"
+            value={snapshot.visualTracking.readyForGlobalOptimization ? "graph ready" : "downstream SfM required"}
           />
           <Metric
             label="visual median residual"
