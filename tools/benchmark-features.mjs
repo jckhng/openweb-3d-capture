@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
-import { extractImageFeatures, matchImageFeatures } from "../src/refinement/features.ts";
+import {
+  extractImageFeatures,
+  matchImageFeatures,
+  matchScaleInvariantFeatures,
+} from "../src/refinement/features.ts";
 import { scoreEpipolarConsistency } from "../src/refinement/reprojection.ts";
 import { VisualConnectivityGraph } from "../src/refinement/visual-graph.ts";
 import { verifyFeatureGeometry } from "../src/refinement/geometric-verification.ts";
@@ -40,25 +44,28 @@ const features = decoded.map((image) => extractImageFeatures(image, {
 }));
 const matchingStarted = performance.now();
 
-const pairs = adjacentPairs(frames.length);
-for (const pair of loopPairs(frames, 8)) pairs.push(pair);
-const scorePair = ([indexA, indexB, kind]) => {
-  const matches = matchImageFeatures(features[indexA], features[indexB]);
+const scorePair = ([indexA, indexB, kind, matcher = "brief"]) => {
+  const matches = matcher === "gradient"
+    ? matchScaleInvariantFeatures(features[indexA], features[indexB])
+    : matchImageFeatures(features[indexA], features[indexB]);
   const pointMatches = matches.map((match) => ({
     pointA: sourcePoint(features[indexA][match.featureA], decoded[indexA], frames[indexA]),
     pointB: sourcePoint(features[indexB][match.featureB], decoded[indexB], frames[indexB]),
   }));
+  const verification = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
+  const inlierMatches = verification.inlierIndices.map((index) => pointMatches[index]);
+  const scoredMatches = inlierMatches.length ? inlierMatches : pointMatches;
   const raw = scoreEpipolarConsistency(
-    pointMatches,
+    scoredMatches,
     frames[indexA].webxrCameraToWorld ?? frames[indexA].cameraToWorld,
     frames[indexB].webxrCameraToWorld ?? frames[indexB].cameraToWorld,
     frames[indexA].intrinsics,
   );
-  const geometry = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
+  const { inlierIndices: _, ...geometry } = verification;
   let refined;
   if (frames[indexA].refinedCameraToWorld && frames[indexB].refinedCameraToWorld && refinement) {
     refined = scoreEpipolarConsistency(
-      pointMatches,
+      scoredMatches,
       frames[indexA].refinedCameraToWorld,
       frames[indexB].refinedCameraToWorld,
       refinement.calibration.intrinsics,
@@ -69,14 +76,15 @@ const scorePair = ([indexA, indexB, kind]) => {
     kind,
     frameA: frames[indexA].id,
     frameB: frames[indexB].id,
+    matcher,
     featuresA: features[indexA].length,
     featuresB: features[indexB].length,
     matches: matches.length,
     geometry,
     calibrationObservation: {
-      matches: pointMatches.length <= 64
-        ? pointMatches
-        : Array.from({ length: 64 }, (_, index) => pointMatches[Math.floor(index * pointMatches.length / 64)]),
+      matches: inlierMatches.length <= 64
+        ? inlierMatches
+        : Array.from({ length: 64 }, (_, index) => inlierMatches[Math.floor(index * inlierMatches.length / 64)]),
       cameraToWorldA: frames[indexA].webxrCameraToWorld ?? frames[indexA].cameraToWorld,
       cameraToWorldB: frames[indexB].webxrCameraToWorld ?? frames[indexB].cameraToWorld,
       intrinsics: frames[indexA].intrinsics,
@@ -85,36 +93,52 @@ const scorePair = ([indexA, indexB, kind]) => {
     refined,
   };
 };
-const pairReports = pairs.map(scorePair);
-for (const adjacent of [...pairReports].filter((pair) => pair.kind === "adjacent")) {
-  if (adjacent.geometry.accepted) continue;
-  for (const offset of [2, 4]) {
-    const indexB = adjacent.frameB;
-    const indexA = indexB - offset;
-    if (indexA >= 0) pairReports.push(scorePair([indexA, indexB, "recovery"]));
+const graph = new VisualConnectivityGraph();
+for (const frame of frames) graph.addFrame(frame.id);
+const pairReports = [];
+const attemptedStrongPairs = new Set();
+const addPair = (definition) => {
+  const pair = scorePair(definition);
+  pairReports.push(pair);
+  if (pair.matcher === "gradient") attemptedStrongPairs.add(pairKey(pair.frameA, pair.frameB));
+  graph.addEdge({
+    frameA: pair.frameA,
+    frameB: pair.frameB,
+    kind: pair.kind,
+    matcher: pair.matcher,
+    matches: pair.matches,
+    geometricInliers: pair.geometry.inliers,
+    geometricInlierRatio: pair.geometry.inlierRatio,
+    medianResidualPixels: pair.raw.medianPixels,
+    p90ResidualPixels: pair.raw.p90Pixels,
+    accepted: pair.geometry.accepted,
+  });
+  return pair;
+};
+for (let index = 0; index < frames.length - 1; index += 1) {
+  let adjacent = addPair([index, index + 1, "adjacent", "brief"]);
+  if (!adjacent.geometry.accepted) {
+    adjacent = addPair([index, index + 1, "adjacent", "gradient"]);
+    if (!adjacent.geometry.accepted) {
+      for (const offset of [2, 4]) {
+        if (index + 1 - offset >= 0) addPair([index + 1 - offset, index + 1, "recovery", "gradient"]);
+      }
+    }
   }
 }
+for (const pair of loopPairs(frames)) addPair([...pair, "gradient"]);
+repairDisconnectedGraph();
 
 const usable = pairReports.filter((pair) => pair.matches >= 12);
 const adjacentUsable = usable.filter((pair) => pair.kind === "adjacent");
 const loopUsable = usable.filter((pair) => pair.kind === "loop");
-const graph = new VisualConnectivityGraph();
-for (const frame of frames) graph.addFrame(frame.id);
-for (const pair of pairReports) graph.addEdge({
-  frameA: pair.frameA,
-  frameB: pair.frameB,
-  kind: pair.kind,
-  matches: pair.matches,
-  geometricInliers: pair.geometry.inliers,
-  geometricInlierRatio: pair.geometry.inlierRatio,
-  medianResidualPixels: pair.raw.medianPixels,
-  p90ResidualPixels: pair.raw.p90Pixels,
-  accepted: pair.geometry.accepted,
-});
 const visualTracking = graph.report();
 if (visualTracking.readyForCalibration) {
   visualTracking.calibrationEstimate = estimateSharedCalibration(
-    pairReports.filter((pair) => pair.geometry.accepted).map((pair) => pair.calibrationObservation),
+    pairReports
+      .filter((pair) => pair.geometry.accepted)
+      .slice(-120)
+      .map((pair) => pair.calibrationObservation),
   );
 }
 for (const pair of pairReports) delete pair.calibrationObservation;
@@ -126,8 +150,8 @@ const report = {
   configuration: {
     maximumDimension: 480,
     maximumFeatures: 450,
-    descriptor: "FAST/Shi-Tomasi + oriented BRIEF-256",
-    matcher: "mutual Hamming + ratio 0.8",
+    descriptor: "multi-scale FAST/Shi-Tomasi + oriented BRIEF-256 + gradient-128 fallback",
+    matcher: "mutual Hamming 0.8; unique gradient L2 0.78 for repair/loops",
     minimumUsableMatches: 12,
   },
   frames: frames.length,
@@ -150,32 +174,83 @@ const serialized = `${JSON.stringify(report, null, 2)}\n`;
 if (outputPath) atomicWrite(outputPath, serialized);
 process.stdout.write(serialized);
 
-function adjacentPairs(length) {
-  return Array.from({ length: Math.max(0, length - 1) }, (_, index) => [index, index + 1, "adjacent"]);
-}
-
-function loopPairs(values, maximumPairs) {
-  const candidates = [];
-  for (let a = 0; a < values.length; a += 1) {
-    for (let b = a + 20; b < values.length; b += 1) {
-      const poseA = values[a].webxrCameraToWorld ?? values[a].cameraToWorld;
-      const poseB = values[b].webxrCameraToWorld ?? values[b].cameraToWorld;
-      const distance = Math.hypot(
-        poseA[0][3] - poseB[0][3],
-        poseA[1][3] - poseB[1][3],
-        poseA[2][3] - poseB[2][3],
-      );
-      candidates.push({ a, b, distance });
-    }
-  }
-  candidates.sort((first, second) => first.distance - second.distance);
+function loopPairs(values) {
+  const maximumDistance = overlapDistanceLimit(values);
   const selected = [];
-  for (const candidate of candidates) {
-    if (selected.some(([a, b]) => Math.abs(a - candidate.a) < 5 || Math.abs(b - candidate.b) < 5)) continue;
-    selected.push([candidate.a, candidate.b, "loop"]);
-    if (selected.length === maximumPairs) break;
+  for (let b = 48; b < values.length; b += 8) {
+    const candidates = [];
+    for (let a = 0; a <= b - 48; a += 1) {
+      const score = overlapCost(values[a], values[b], 0.65, maximumDistance);
+      if (Number.isFinite(score)) candidates.push({ a, b, score });
+    }
+    candidates.sort((first, second) => first.score - second.score);
+    selected.push(...candidates.slice(0, 2).map(({ a, b }) => [a, b, "loop"]));
   }
   return selected;
+}
+
+function repairDisconnectedGraph() {
+  if (graph.componentCount() <= 1) return;
+  const maximumDistance = overlapDistanceLimit(frames);
+  const candidates = [];
+  for (let a = 0; a < frames.length; a += 1) {
+    for (let b = a + 1; b < frames.length; b += 1) {
+      if (attemptedStrongPairs.has(pairKey(frames[a].id, frames[b].id))) continue;
+      const separation = b - a;
+      const recovery = separation <= 8;
+      const loop = separation >= 48;
+      if (!recovery && !loop) continue;
+      const score = overlapCost(
+        frames[a],
+        frames[b],
+        loop ? 0.65 : 0.35,
+        loop ? maximumDistance : maximumDistance * 0.75,
+      );
+      if (Number.isFinite(score)) candidates.push({ a, b, kind: loop ? "loop" : "recovery", score });
+    }
+  }
+  candidates.sort((first, second) => first.score - second.score);
+  let attempts = 0;
+  for (const candidate of candidates) {
+    if (graph.componentCount() <= 1 || attempts >= 48) break;
+    if (graph.areConnected(candidate.a, candidate.b)) continue;
+    addPair([candidate.a, candidate.b, candidate.kind, "gradient"]);
+    attempts += 1;
+  }
+}
+
+function overlapCost(frameA, frameB, minimumAgreement, maximumDistance) {
+  const poseA = frameA.webxrCameraToWorld ?? frameA.cameraToWorld;
+  const poseB = frameB.webxrCameraToWorld ?? frameB.cameraToWorld;
+  const directionA = [-poseA[0][2], -poseA[1][2], -poseA[2][2]];
+  const directionB = [-poseB[0][2], -poseB[1][2], -poseB[2][2]];
+  const agreement = directionA[0] * directionB[0] + directionA[1] * directionB[1] + directionA[2] * directionB[2];
+  if (agreement < minimumAgreement) return Number.POSITIVE_INFINITY;
+  const distance = Math.hypot(
+    poseA[0][3] - poseB[0][3],
+    poseA[1][3] - poseB[1][3],
+    poseA[2][3] - poseB[2][3],
+  );
+  return distance <= maximumDistance ? distance + (1 - agreement) * 0.5 : Number.POSITIVE_INFINITY;
+}
+
+function overlapDistanceLimit(values) {
+  const baselines = [];
+  for (let index = 1; index < values.length; index += 1) {
+    const poseA = values[index - 1].webxrCameraToWorld ?? values[index - 1].cameraToWorld;
+    const poseB = values[index].webxrCameraToWorld ?? values[index].cameraToWorld;
+    baselines.push(Math.hypot(
+      poseA[0][3] - poseB[0][3],
+      poseA[1][3] - poseB[1][3],
+      poseA[2][3] - poseB[2][3],
+    ));
+  }
+  baselines.sort((a, b) => a - b);
+  return Math.min(1, Math.max(0.2, baselines[Math.floor(baselines.length / 2)] * 12));
+}
+
+function pairKey(frameA, frameB) {
+  return frameA < frameB ? `${frameA}:${frameB}` : `${frameB}:${frameA}`;
 }
 
 function decodeGray(filename, sourceWidth, sourceHeight) {

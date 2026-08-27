@@ -16,6 +16,7 @@ describe("pose-independent geometric verification", () => {
       matches: 33,
       accepted: true,
     });
+    expect(verifyFeatureGeometry(matches, 640, 480).inlierIndices.length).toBeGreaterThanOrEqual(12);
   });
 
   it("rejects an insufficient match set", () => {
@@ -27,6 +28,7 @@ describe("pose-independent geometric verification", () => {
       matches: 7,
       inliers: 0,
       inlierRatio: 0,
+      inlierIndices: [],
       accepted: false,
     });
   });

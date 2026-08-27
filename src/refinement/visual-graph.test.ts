@@ -25,6 +25,8 @@ describe("visual connectivity graph", () => {
       readyForGlobalOptimization: false,
       directTrainReady: false,
     });
+    expect(graph.areConnected(0, 9)).toBe(true);
+    expect(graph.componentCount()).toBe(1);
   });
 
   it("reports disconnected graphs as weak and connected noisy graphs as optimization-ready", () => {

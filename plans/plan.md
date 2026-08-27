@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 27 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented, recalibrated from the first target-phone dataset, and awaits a second hardware capture. Incremental phone-worker visual tracking and bounded shared calibration are implemented and validated by seesaw replay. Phone hardware performance, loop closure, and gated SE(3) correction remain the required bridge to M3.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced a second hardware capture. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. Phone runtime performance and bounded SE(3) correction remain the required bridge to M3.
 
 Implemented:
 
@@ -40,12 +40,15 @@ Implemented:
 * persisted visual connectivity/readiness report with explicit downstream-SfM fallback
 * bounded shared focal-scale and radial-distortion estimation
 * hard gate preventing global pose optimization without a loop closure
+* multi-scale oriented gradient descriptors for recovery and wider-baseline matching
+* RANSAC-inlier-only residual and calibration scoring
+* bounded disconnected-component repair and stricter loop-closure classification
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (45 tests)
+npm test        PASS (46 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -73,6 +76,13 @@ Hardware and reconstruction evidence:
 * raw visual graph residual is 1.09 pixels median and 5.09 pixels p90, indicating correction is required
 * shared calibration replay estimates focal scale 1.0175 and radial k1 0.040; median residual falls to 0.96 pixels
 * the reference COLMAP solution is approximately focal scale 1.0155 and radial k1 0.0548
+* 145-frame second target-phone capture with all frames registered by PyCOLMAP 4.1.1
+* second-capture sparse model with 82,743 points and 0.55-pixel mean reprojection error
+* second-capture phone-safe hybrid replay connects 145/145 frames in one component and verifies eight loop closures separated by at least 48 frames
+* those eight loop edges score 9.24–56.91 pixels under raw WebXR poses but 0.80–2.01 pixels under independently refined COLMAP poses, supporting real drift constraints rather than short-range overlap mislabeled as loops
+* second-capture bounded shared calibration estimates focal scale 1.0125 and radial k1 0.070, compared with COLMAP's approximately 1.027–1.028 and 0.056; this is useful initialization but not yet accurate enough to replace joint pose/calibration refinement
+* second-capture raw visual graph remains above the direct-train residual gate, so the current export correctly requests pose optimization or downstream SfM
+* the upgraded seesaw replay remains connected but finds no verified loop closure and therefore still requests downstream SfM
 
 M2 calibration findings:
 
@@ -92,6 +102,10 @@ Close-focus findings:
 * WebXR raw camera access exposes the aligned camera texture but no autofocus, lens selection, or focus-distance control.
 * the web recorder cannot recover optical detail that was never focused; it must reject too-close/soft frames and declare a minimum supported capture scale.
 * the provisional minimum target distance is 0.45 m and requires calibration on the target phone.
+* WebXR remains useful as a synchronized metric pose, depth, motion, and capture-guidance source even when its camera frames are unsuitable for close-range reconstruction.
+* the seesaw comparison supports treating WebXR as a strong prior rather than a final solution: after similarity alignment, its poses are close to the independent COLMAP result, but the refined reconstruction is materially better.
+* the product must not require the sensor that supplies navigation to also be the only source of reconstruction imagery.
+* autofocus is not sufficient by itself: capture must wait for focus convergence and a stationary lens, otherwise focus scans create blurred frames and changing effective intrinsics.
 
 Required before declaring M2 complete:
 
@@ -113,7 +127,9 @@ Plan constraints clarified by implementation:
 * M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
 * WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
 * Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
-* The worker implementation is production-built but not yet a phone runtime result. Loop-closure descriptors and candidate selection must improve before global pose optimization is allowed.
+* The upgraded worker is production-built but not yet measured on the target phone. The second capture supplies a connected graph and independently validated loop closures, permitting a bounded SE(3) prototype; direct-train readiness remains disabled until that optimizer passes residual and correction gates.
+* The current approach is fail-safe but not yet universally reconstruction-robust: it preserves raw data, gates unverified refinement, and falls back to downstream SfM, but fixed-focus WebXR imposes an unrecoverable optical-quality limit for small or close subjects.
+* Do not couple the open dataset schema to one capture frontend. WebXR, an autofocus-photo fallback, and any future native precision frontend must produce the same raw/refined provenance model and downstream-compatible exports.
 
 ## 1. Objective
 
@@ -156,15 +172,17 @@ ARCore-capable device preferred
 
 Primary development device can be the current phone.
 
-Do not attempt:
+Do not attempt as production v1 scope:
 
 * iOS/Safari parity
 * Firefox
 * desktop capture
-* APK/native Android
+* a production APK/native Android application
 * broad device compatibility
 
 during v1.
+
+A bounded native Android camera feasibility spike is permitted after the current phone refinement validation. It is an architecture experiment, not a v1 frontend commitment, and must export the same open dataset schema as the web recorder.
 
 Feature detection must be used everywhere so unsupported capabilities degrade cleanly.
 
@@ -633,6 +651,153 @@ If small-object detail remains inadequate at the focus floor, constrain web v1 t
 
 ---
 
+# 12B. Pose sensor versus reconstruction camera
+
+Architectural decision:
+
+> WebXR is a navigation and measurement source. It is not required to be the final reconstruction-image source or the final pose authority.
+
+The capture system has two distinct information channels:
+
+```text
+navigation channel
+WebXR / ARCore pose + depth + IMU
+    ↓
+metric scale, overlap prediction, motion guidance,
+pair selection, correction bounds, coverage
+
+reconstruction channel
+sharp, calibrated camera keyframes
+    ↓
+features, visual refinement, final training images
+```
+
+The channels may come from the same synchronized WebXR frame when optical quality is adequate. They may be separated when fixed focus prevents the subject from being recorded sharply.
+
+WebXR poses remain useful even when replaced in the final transform file because they:
+
+* reduce visual matching from an unrestricted all-pairs search to likely overlapping neighbors
+* provide approximate metric scale and gravity/world orientation
+* enable live speed, baseline, redundancy, and coverage guidance
+* regularize phone pose corrections and reject physically implausible solutions
+* provide an immediate raw-pose export when visual refinement cannot run
+
+Never overwrite this information. Preserve raw WebXR, visually refined, and downstream-SfM poses independently with explicit provenance and readiness selection.
+
+## Capture-path spectrum
+
+### Standard WebXR mode — v1
+
+Use synchronized WebXR images and poses for medium objects, furniture, and environments that lie inside the calibrated sharp-focus envelope.
+
+Properties:
+
+* zero installation and lowest capture friction
+* best browser-accessible pose/image synchronization
+* live depth, motion, and coverage guidance where available
+* fixed-focus optical floor on the current platform
+* visual validation/refinement required before direct-train readiness
+
+### Autofocus photo/SfM fallback — candidate web mode
+
+Use ordinary browser camera capture for sharper images, but do not claim that those images inherit synchronized WebXR poses.
+
+Properties:
+
+* preserves the zero-install path for small or close subjects
+* exports photos explicitly as unposed or approximately guided
+* routes to Spirula native SfM, LichtFeld COLMAP, or project desktop refinement
+* gives up immediate direct-train output unless independent visual SfM succeeds
+
+This is preferable to attaching stale or guessed WebXR transforms to autofocus images.
+
+### WebXR plus browser autofocus hybrid — experimental only
+
+Concurrent or interleaved WebXR and `getUserMedia()` capture has unresolved camera ownership, frame-time alignment, lens-state, intrinsics, and relocalization risks. A two-pass variant may use WebXR to survey an orbit and then capture autofocus photographs, but the photographs still require visual registration.
+
+Do not make this hybrid the product foundation without measured cross-stream synchronization and calibration evidence.
+
+### Native precision mode — post-v1 candidate
+
+A thin Android capture frontend may retain ARCore as the navigation source while using ARCore autofocus or Shared Camera/Camera2 for controlled, high-quality keyframes.
+
+Required properties:
+
+* same capture and export schema as the web application
+* sensor timestamps and per-frame camera metadata
+* autofocus state, lens state, focus distance/range, exposure, and available intrinsic/distortion metadata
+* capture only after focus convergence, lens stability, acceptable motion, and sharpness validation
+* raw ARCore poses retained as priors; final poses remain visually validated/refined
+* device capability detection and graceful fallback
+
+Shared Camera stream counts and high-resolution still support vary by device. Its hardware-depth behavior also differs from a normal ARCore session. Treat these as measured device capabilities, not architectural assumptions.
+
+## Focus-aware keyframe policy
+
+Continuous autofocus can introduce focus sweeps and focus breathing. Precision capture should therefore use an event-driven keyframe policy:
+
+```text
+aim at subject
+    ↓
+request/allow focus
+    ↓
+wait for focused state + stationary lens
+    ↓
+wait for low camera motion
+    ↓
+measure subject-region sharpness
+    ↓
+capture keyframe and save lens/camera metadata
+```
+
+Reject or defer frames while the lens is scanning. Prefer stable sharp keyframes over a high frame count. If focus changes materially during an orbit, represent the corresponding intrinsics per frame or split frames into calibration groups rather than forcing one shared camera model.
+
+## Architecture validation experiment
+
+Before committing to a native precision frontend, capture the same rigid textured target under fixed lighting and approximately identical motion at 0.25, 0.35, 0.45, 0.60, and 1.00 m using:
+
+1. current WebXR fixed-focus capture
+2. ordinary web autofocus photos routed through downstream SfM
+3. a minimal native ARCore `AUTO` and, where supported, Shared Camera/Camera2 prototype
+
+Record and compare:
+
+```text
+subject-region sharpness / printed-target detail
+focus state, lens state, and focus distance
+image and pose timestamp relationship
+intrinsics stability and distortion estimate
+valid feature count and pair connectivity
+registered-frame percentage
+median and p90 reprojection residual
+pose corrections relative to WebXR
+duplicate edges, floaters, and missing detail in reconstruction
+processing time, thermal behavior, and capture failure rate
+```
+
+Decision rules:
+
+* if WebXR meets the sharpness and reconstruction gates beyond a calibrated distance, retain it as Standard Capture with an explicit operating envelope
+* if autofocus photographs are materially sharper but cannot be synchronized robustly in-browser, use web photo/SfM as the fallback and pursue native Precision Capture
+* if ARCore `AUTO` alone supplies stable sharp synchronized frames, prefer the simpler native path over Shared Camera complexity
+* use Shared Camera only when its added resolution, metadata, or focus control materially improves reconstruction on supported devices
+* retain downstream SfM regardless; no capture frontend may label a dataset direct-train ready without the same visual readiness gates
+
+This creates progressive product tiers rather than forcing one mechanism to cover incompatible operating ranges:
+
+```text
+STANDARD CAPTURE
+WebXR, zero install, calibrated medium/large-subject envelope
+
+PRECISION CAPTURE
+native candidate, controlled focus and metadata for small/close subjects
+
+PHOTO/SFM FALLBACK
+sharp images, no trusted supplied poses, downstream reconstruction required
+```
+
+---
+
 # 13. Motion detection
 
 Use XR pose and gyro if available.
@@ -754,13 +919,16 @@ Offline prototype result:
 * the initial BRIEF loop candidates do not produce enough matches; do not start pose optimization from this graph yet
 * pose-independent RANSAC plus recovery edges connect the complete sequence without trusting WebXR residuals as the connectivity test
 * bounded focal-scale/k1 estimation recovers the direction and magnitude of the independent COLMAP calibration
+* the hybrid multi-scale matcher connects all 145 frames of the second phone capture and verifies eight long-range loop closures
+* independent COLMAP poses reduce the accepted loop-edge residuals from 9.24–56.91 pixels to 0.80–2.01 pixels, validating their use as pose-drift constraints
+* the same hybrid matcher does not fabricate a loop closure on the seesaw sequence
 
 Next refinement bound:
 
-1. validate extraction, matching, memory, and thermal behavior on the target phone
-2. replace or augment BRIEF for wider-baseline loop matching
-3. add small WebXR-regularized SE(3) corrections only after a verified loop closure
-4. retain downstream SfM as the mandatory fallback when global optimization is gated off
+1. deploy and measure extraction, matching, memory, and thermal behavior on the target phone
+2. implement bounded WebXR-regularized SE(3) corrections using only verified inlier tracks and loop closures
+3. reject the solution unless connectivity is preserved, residuals improve, and translation/rotation corrections remain inside explicit limits
+4. write refined poses separately, run the direct-train readiness gate, and retain downstream SfM whenever optimization is unavailable or rejected
 
 Do not begin M3 spherical guidance until this validator can expose weak visual connections. M3 guidance should improve pose-graph conditioning, not only fill geometric view bins.
 
@@ -1219,7 +1387,7 @@ Do not implement:
 * custom SLAM
 * custom SfM
 * SIFT/SURF pose tracking
-* native Android
+* a production native Android application during v1
 * iOS
 * automatic cloud backup
 * server database
@@ -1551,21 +1719,23 @@ Give the agent work in this order:
 
 12. Destination SfM adapters and desktop fallback
 
-13. Object target model
+13. Controlled web-versus-native focus architecture experiment
 
-14. Pose-graph-aware coverage visualization
+14. Object target model
 
-15. Next-view guidance
+15. Pose-graph-aware coverage visualization
 
-16. Capture library
+16. Next-view guidance
 
-17. Depth recording
+17. Capture library
 
-18. PLY seed generation
+18. Depth recording
 
-19. Splat viewer
+19. PLY seed generation
 
-20. Scene Mode
+20. Splat viewer
+
+21. Scene Mode
 ```
 
 Do not let the agent jump ahead to splat rendering because it looks more visually interesting.

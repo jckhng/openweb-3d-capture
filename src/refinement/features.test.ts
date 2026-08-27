@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractImageFeatures,
   matchImageFeatures,
+  matchScaleInvariantFeatures,
   type GrayImage,
 } from "./features";
 
@@ -36,12 +37,20 @@ function texture(shiftX = 0): GrayImage {
 }
 
 describe("low-resolution feature tracking", () => {
-  it("extracts spatially distributed FAST/BRIEF features", () => {
+  it("extracts spatially distributed multi-scale FAST/BRIEF features", () => {
     const features = extractImageFeatures(checkerboard(), { maximumFeatures: 100, cellSize: 8 });
     expect(features.length).toBeGreaterThan(20);
     expect(features.length).toBeLessThanOrEqual(100);
     expect(features.every((feature) => feature.descriptor.length === 8)).toBe(true);
+    expect(features.every((feature) => feature.gradientDescriptor.length === 128)).toBe(true);
     expect(features.every((feature) => Number.isFinite(feature.orientation))).toBe(true);
+    expect(features.some((feature) => feature.scale > 1)).toBe(true);
+  });
+
+  it("matches translated images with the scale-invariant fallback", () => {
+    const first = extractImageFeatures(texture(), { maximumFeatures: 120, cellSize: 8 });
+    const second = extractImageFeatures(texture(2), { maximumFeatures: 120, cellSize: 8 });
+    expect(matchScaleInvariantFeatures(first, second).length).toBeGreaterThan(8);
   });
 
   it("matches translated image features with mutual ratio filtering", () => {

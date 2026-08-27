@@ -4,6 +4,7 @@ export interface GeometricVerification {
   matches: number;
   inliers: number;
   inlierRatio: number;
+  inlierIndices: number[];
   accepted: boolean;
 }
 
@@ -23,7 +24,7 @@ export function verifyFeatureGeometry(
     pointB: normalize(match.pointB, width, height, scale),
   }));
   const threshold = 3 / scale;
-  let bestInliers = 0;
+  let bestInlierIndices: number[] = [];
   let randomState = (matches.length * 2654435761) >>> 0;
   for (let iteration = 0; iteration < ITERATIONS; iteration += 1) {
     const indices: number[] = [];
@@ -34,21 +35,27 @@ export function verifyFeatureGeometry(
     }
     const fundamental = fundamentalFromEight(indices.map((index) => normalized[index]));
     if (!fundamental) continue;
-    let inliers = 0;
-    for (const match of normalized) {
-      if (sampsonDistance(match.pointA, match.pointB, fundamental) <= threshold) inliers += 1;
+    const inlierIndices: number[] = [];
+    for (let index = 0; index < normalized.length; index += 1) {
+      const match = normalized[index];
+      if (sampsonDistance(match.pointA, match.pointB, fundamental) <= threshold) {
+        inlierIndices.push(index);
+      }
     }
-    bestInliers = Math.max(bestInliers, inliers);
+    if (inlierIndices.length > bestInlierIndices.length) bestInlierIndices = inlierIndices;
   }
-  return result(matches.length, bestInliers);
+  return result(matches.length, bestInlierIndices);
 }
 
-function result(matches: number, inliers: number): GeometricVerification {
+function result(matches: number, inlierIndices: number[] | number): GeometricVerification {
+  const indices = typeof inlierIndices === "number" ? [] : inlierIndices;
+  const inliers = typeof inlierIndices === "number" ? inlierIndices : indices.length;
   const inlierRatio = matches ? inliers / matches : 0;
   return {
     matches,
     inliers,
     inlierRatio,
+    inlierIndices: indices,
     accepted: inliers >= 12 && inlierRatio >= 0.35,
   };
 }

@@ -19,6 +19,15 @@ export class VisualConnectivityGraph {
     if (edge.accepted) this.union(edge.frameA, edge.frameB);
   }
 
+  areConnected(frameA: number, frameB: number): boolean {
+    if (!this.parents.has(frameA) || !this.parents.has(frameB)) return false;
+    return this.find(frameA) === this.find(frameB);
+  }
+
+  componentCount(): number {
+    return new Set([...this.parents.keys()].map((frameId) => this.find(frameId))).size;
+  }
+
   report(): VisualTrackingReport {
     const frameIds = [...this.parents.keys()];
     const componentSizes = new Map<number, number>();

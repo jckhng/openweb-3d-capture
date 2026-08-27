@@ -140,6 +140,7 @@ export interface VisualTrackingEdge {
   frameA: number;
   frameB: number;
   kind: "adjacent" | "recovery" | "loop";
+  matcher?: "brief" | "gradient";
   matches: number;
   geometricInliers?: number;
   geometricInlierRatio?: number;
