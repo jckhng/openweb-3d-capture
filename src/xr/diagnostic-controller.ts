@@ -1,10 +1,14 @@
 import { exportDatasetZip } from "../dataset/zip";
-import { QualityKeyframeSelector } from "../keyframes/quality-selector";
+import {
+  DEFAULT_QUALITY_SELECTOR_CONFIG,
+  QualityKeyframeSelector,
+} from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
-import { scoreLaplacianSharpness } from "../quality/sharpness";
+import { analyzeTargetImageQuality } from "../quality/sharpness";
 import { medianCenterDepth } from "../quality/focus-distance";
 import { IncrementalVisualTracker, unavailableReport } from "../refinement/visual-tracker";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
+import { BUILD_TIMESTAMP } from "../shared/build";
 import type {
   CaptureDecision,
   CaptureDecisionReason,
@@ -18,6 +22,8 @@ import type {
 import { makeCaptureId } from "../storage/storage";
 import type { CapturePersistence } from "../storage/storage";
 import { IMUSensorRecorder } from "./imu";
+
+const REJECTED_PREVIEW_INTERVAL = 4;
 
 interface XRViewWithCamera extends XRView {
   camera?: {
@@ -64,12 +70,15 @@ export interface CaptureQualityTelemetry {
   candidates: number;
   rejected: number;
   rejectedBlur: number;
+  rejectedLowTexture: number;
   rejectedMotion: number;
   rejectedRedundant: number;
   rejectedTracking: number;
   rejectedImage: number;
   rejectedTooClose: number;
   sharpnessScore: number;
+  sharpnessThreshold: number;
+  textureScore: number;
   motionScore: number;
   noveltyScore: number;
   linearVelocity: number;
@@ -297,6 +306,7 @@ export class XRDiagnosticController {
       hasDepth: false,
       hasImu: false,
       status: "incomplete",
+      applicationBuild: { builtAt: BUILD_TIMESTAMP },
     };
     await this.persistence.createCapture(metadata);
     this.activeCapture = {
@@ -440,11 +450,15 @@ export class XRDiagnosticController {
         imageAvailable: Boolean(image),
         imageSynchronized: image?.source === "xr-camera",
         sharpnessScore: image?.sharpnessScore ?? 0,
+        textureScore: image?.textureScore ?? 0,
         targetDistance: input.depth?.targetDistance,
       });
       if (decision.accepted) decision.acceptedFrameId = active.frames;
       this.updateQualityTelemetry(decision);
-      await this.persistence.appendDecision(active.id, decision);
+      const rejectedPreview = decision.accepted || !image || candidateId % REJECTED_PREVIEW_INTERVAL !== 0
+        ? undefined
+        : await canvasToBlob(this.qualityCanvas, "image/jpeg", 0.7) ?? undefined;
+      await this.persistence.appendDecision(active.id, decision, rejectedPreview);
       if (!decision.accepted) {
         this.snapshot.lastImageStatus = `candidate rejected: ${decision.reason}`;
         this.emit();
@@ -532,6 +546,8 @@ export class XRDiagnosticController {
     const telemetry = this.snapshot.captureQuality;
     telemetry.candidates += 1;
     telemetry.sharpnessScore = decision.sharpnessScore;
+    telemetry.sharpnessThreshold = decision.sharpnessThreshold ?? DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness;
+    telemetry.textureScore = decision.textureScore ?? 0;
     telemetry.motionScore = decision.quality.motionScore;
     telemetry.noveltyScore = decision.quality.noveltyScore;
     telemetry.linearVelocity = decision.linearVelocity;
@@ -542,6 +558,7 @@ export class XRDiagnosticController {
 
     telemetry.rejected += 1;
     if (decision.reason === "blur") telemetry.rejectedBlur += 1;
+    else if (decision.reason === "low-texture") telemetry.rejectedLowTexture += 1;
     else if (decision.reason === "too-close") telemetry.rejectedTooClose += 1;
     else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
     else if (decision.reason === "redundant") telemetry.rejectedRedundant += 1;
@@ -613,9 +630,9 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.putImageData(imageData, 0, 0);
-        const sharpnessScore = this.measureSharpness(canvas, width, height);
+        const quality = this.measureImageQuality(canvas, width, height);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
-        if (blob) return { blob, width, height, source: "xr-camera", sharpnessScore };
+        if (blob) return { blob, width, height, source: "xr-camera", ...quality };
       } catch {
         // Fall through to the optional getUserMedia camera.
       }
@@ -629,17 +646,21 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.drawImage(this.rawVideo, 0, 0, width, height);
-        const sharpnessScore = this.measureSharpness(canvas, width, height);
+        const quality = this.measureImageQuality(canvas, width, height);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
-        return blob ? { blob, width, height, source: "media-stream", sharpnessScore } : null;
+        return blob ? { blob, width, height, source: "media-stream", ...quality } : null;
       }
     }
     return null;
   }
 
-  private measureSharpness(source: CanvasImageSource, width: number, height: number): number {
+  private measureImageQuality(
+    source: CanvasImageSource,
+    width: number,
+    height: number,
+  ): { sharpnessScore: number; textureScore: number } {
     const context = this.qualityCanvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return 0;
+    if (!context) return { sharpnessScore: 0, textureScore: 0 };
     const cropSize = Math.max(1, Math.floor(Math.min(width, height) * 0.6));
     const sourceX = Math.floor((width - cropSize) / 2);
     const sourceY = Math.floor((height - cropSize) / 2);
@@ -655,7 +676,7 @@ export class XRDiagnosticController {
       this.qualityCanvas.height,
     );
     const image = context.getImageData(0, 0, this.qualityCanvas.width, this.qualityCanvas.height);
-    return scoreLaplacianSharpness(image.data, image.width, image.height);
+    return analyzeTargetImageQuality(image.data, image.width, image.height);
   }
 
   private ensureCameraReadPipeline(width: number, height: number): void {
@@ -789,6 +810,7 @@ interface CapturedImage {
   height: number;
   source: "xr-camera" | "media-stream";
   sharpnessScore: number;
+  textureScore: number;
 }
 
 function createQualityTelemetry(): CaptureQualityTelemetry {
@@ -796,12 +818,15 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
     candidates: 0,
     rejected: 0,
     rejectedBlur: 0,
+    rejectedLowTexture: 0,
     rejectedMotion: 0,
     rejectedRedundant: 0,
     rejectedTracking: 0,
     rejectedImage: 0,
     rejectedTooClose: 0,
     sharpnessScore: 0,
+    sharpnessThreshold: DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness,
+    textureScore: 0,
     motionScore: 0,
     noveltyScore: 0,
     linearVelocity: 0,

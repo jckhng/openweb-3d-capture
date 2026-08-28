@@ -7,6 +7,7 @@ import type { CapabilityReport, CaptureMetadata, Matrix4 } from "../shared/types
 import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
 import { isOpfsSupported } from "../storage/storage";
+import { BUILD_TIMESTAMP, formatBuildTimestamp } from "../shared/build";
 
 const MINIMUM_TARGET_DISTANCE_CM = Math.round(
   DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
@@ -84,6 +85,9 @@ export function App() {
       <header>
         <p className="eyebrow">M2 quality recorder</p>
         <h1>Open Web 3D Capture</h1>
+        <p className="header-build-id">
+          Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
+        </p>
         <p className="lede">Record a durable, reconstruction-ready WebXR image and pose sequence.</p>
       </header>
 
@@ -96,6 +100,9 @@ export function App() {
       ) : null}
 
       <section className="capture-panel" aria-label="Capture controls">
+        <p className="build-id">
+          Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
+        </p>
         <div className="capture-status">
           <div>
             <span>accepted frames</span>
@@ -107,7 +114,7 @@ export function App() {
           </div>
           <div>
             <span>{snapshot.captureId ? "sharpness" : "minimum target"}</span>
-            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness
+            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < snapshot.captureQuality.sharpnessThreshold
               ? "unavailable"
               : "available"}
             >
@@ -226,12 +233,15 @@ export function App() {
           <Metric label="candidates" value={snapshot.captureQuality.candidates} />
           <Metric label="rejected" value={snapshot.captureQuality.rejected} />
           <Metric label="rejected blur" value={snapshot.captureQuality.rejectedBlur} />
+          <Metric label="rejected low texture" value={snapshot.captureQuality.rejectedLowTexture} />
           <Metric label="rejected motion" value={snapshot.captureQuality.rejectedMotion} />
           <Metric label="rejected redundant" value={snapshot.captureQuality.rejectedRedundant} />
           <Metric label="rejected tracking" value={snapshot.captureQuality.rejectedTracking} />
           <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
           <Metric label="rejected too close" value={snapshot.captureQuality.rejectedTooClose} />
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
+          <Metric label="sharpness threshold" value={formatPercent(snapshot.captureQuality.sharpnessThreshold)} />
+          <Metric label="texture" value={formatPercent(snapshot.captureQuality.textureScore)} />
           <Metric label="motion score" value={formatPercent(snapshot.captureQuality.motionScore)} />
           <Metric label="novelty score" value={formatPercent(snapshot.captureQuality.noveltyScore)} />
           <Metric label="visual graph" value={snapshot.visualTracking.state} />
@@ -321,7 +331,10 @@ export function App() {
               <li key={capture.captureId}>
                 <div>
                   <strong>{capture.captureId}</strong>
-                  <span>{capture.frameCount} frames · {capture.captureMode} · {capture.status} · {capture.createdAt}</span>
+                  <span>
+                    {capture.frameCount} frames · {capture.captureMode} · {capture.status} · {capture.createdAt}
+                    {capture.applicationBuild ? ` · build ${formatBuildTimestamp(capture.applicationBuild.builtAt)}` : " · legacy build"}
+                  </span>
                 </div>
                 <button
                   disabled={Boolean(busy)}
@@ -428,6 +441,8 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
       return "GOOD — continue around the object. Stop after 50–100 accepted frames.";
     case "blur":
       return "HOLD STEADY OR MOVE FARTHER — the target is not sharp enough.";
+    case "low-texture":
+      return "AIM AT MORE DETAIL — keep the object centered with visible edges or texture.";
     case "too-close":
       return `MOVE FARTHER — fixed-focus WebXR is unreliable below ${MINIMUM_TARGET_DISTANCE_CM} cm.`;
     case "motion":

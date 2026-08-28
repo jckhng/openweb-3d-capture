@@ -179,6 +179,7 @@ export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointClo
 
   for (const [path, data] of dataset.images) files.push({ path, data });
   for (const [path, data] of dataset.depths) files.push({ path, data });
+  for (const [path, data] of dataset.candidatePreviews ?? []) files.push({ path, data });
   if (pointCloud) files.push(pointCloud);
   return files;
 }

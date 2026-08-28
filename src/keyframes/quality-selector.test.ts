@@ -22,6 +22,7 @@ function candidate(overrides: Partial<QualityCandidate> = {}): QualityCandidate 
     imageAvailable: true,
     imageSynchronized: true,
     sharpnessScore: 0.8,
+    textureScore: 0.8,
     ...overrides,
   };
 }
@@ -45,6 +46,7 @@ describe("QualityKeyframeSelector", () => {
     [{ imageAvailable: false }, "image-unavailable"],
     [{ imageSynchronized: false }, "unsynchronized-image"],
     [{ targetDistance: 0.3 }, "too-close"],
+    [{ textureScore: 0.05 }, "low-texture"],
     [{ sharpnessScore: 0.2 }, "blur"],
   ] as const)("rejects invalid input as %s", (overrides, reason) => {
     const selector = new QualityKeyframeSelector();
@@ -69,5 +71,17 @@ describe("QualityKeyframeSelector", () => {
       .toBe("redundant");
     expect(selector.evaluate(candidate({ candidateId: 2, timestamp: 1000, cameraToWorld: pose(0.006, Math.PI / 30) })).reason)
       .toBe("accepted");
+  });
+
+  it("adapts to recent sharp views without exceeding the bounded threshold", () => {
+    const selector = new QualityKeyframeSelector();
+    for (let index = 0; index < 4; index += 1) {
+      selector.evaluate(candidate({ candidateId: index, timestamp: index * 250, sharpnessScore: 0.8 }));
+    }
+    const marginal = selector.evaluate(candidate({ candidateId: 5, timestamp: 1250, sharpnessScore: 0.49 }));
+    expect(marginal.sharpnessThreshold).toBeCloseTo(0.5);
+    expect(marginal.reason).toBe("blur");
+    const bounded = selector.evaluate(candidate({ candidateId: 6, timestamp: 1500, sharpnessScore: 0.51 }));
+    expect(bounded.reason).toBe("accepted");
   });
 });

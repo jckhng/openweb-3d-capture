@@ -54,12 +54,14 @@ describe("Nerfstudio serialization", () => {
         hasDepth: false,
         hasImu: false,
         status: "complete",
+        applicationBuild: { builtAt: "2026-08-28T03:15:00.000Z" },
       },
       frames: [frame],
       decisions: [],
       imu: [],
       images: new Map([[frame.imagePath!, new Blob(["jpg"])]]),
       depths: new Map(),
+      candidatePreviews: new Map([["debug/rejected/000004.jpg", new Blob(["preview"])]]),
     };
 
     const files = buildDatasetFiles(dataset);
@@ -70,10 +72,14 @@ describe("Nerfstudio serialization", () => {
       "telemetry/imu.jsonl",
       "debug/session.jsonl",
       "images/000000.jpg",
+      "debug/rejected/000004.jpg",
     ]);
     const transforms = JSON.parse(files[0].data as string) as Record<string, unknown>;
     expect(transforms).not.toHaveProperty("captureId");
     expect(transforms).not.toHaveProperty("format");
+    expect(JSON.parse(files[1].data as string)).toMatchObject({
+      applicationBuild: { builtAt: "2026-08-28T03:15:00.000Z" },
+    });
   });
 
   it("serializes quality decisions separately from accepted frames", () => {

@@ -35,6 +35,7 @@ export type CaptureDecisionReason =
   | "image-unavailable"
   | "unsynchronized-image"
   | "too-close"
+  | "low-texture"
   | "blur"
   | "motion"
   | "redundant";
@@ -48,6 +49,8 @@ export interface CaptureDecision {
   trackingState: string;
   cameraToWorld: Matrix4;
   sharpnessScore: number;
+  textureScore?: number;
+  sharpnessThreshold?: number;
   linearVelocity: number;
   angularVelocity: number;
   translationNovelty: number;
@@ -111,6 +114,9 @@ export interface CaptureMetadata {
   hasDepth: boolean;
   hasImu: boolean;
   status: CaptureStatus;
+  applicationBuild?: {
+    builtAt: string;
+  };
   cameraResolution?: { width: number; height: number };
 }
 
@@ -121,6 +127,7 @@ export interface CaptureDataset {
   imu: IMUSample[];
   images: Map<string, Blob>;
   depths: Map<string, Blob>;
+  candidatePreviews?: Map<string, Blob>;
   refinement?: DatasetRefinement;
   visualTracking?: VisualTrackingReport;
 }

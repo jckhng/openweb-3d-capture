@@ -7,6 +7,7 @@ Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic q
 Implemented:
 
 * Vite, React, TypeScript, PWA manifest, production service worker
+* visible UTC build timestamp persisted into every new capture export
 * browser capability probe and live diagnostic UI
 * immersive AR session, pose, projection, intrinsics, frame-rate, IMU, and CPU-depth telemetry
 * 20-frame diagnostic capture with raw-XR-camera readback where granted
@@ -20,7 +21,7 @@ Implemented:
 * capture-window IMU export
 * network-first production service worker with offline fallback
 * compact immersive capture HUD that leaves the camera view unobstructed
-* center-crop Laplacian sharpness scoring
+* 3×3 target-region Laplacian sharpness scoring with separate texture confidence
 * pose-derived linear/angular motion scoring
 * translation/rotation novelty selection
 * explicit rejection reasons and live quality guidance
@@ -48,12 +49,15 @@ Implemented:
 * 480-pixel live BRIEF tracking backed by retained 720-pixel grayscale for deferred repair
 * recovery across all temporal separations, prioritized from adjacent breaks through verified loops
 * visible deferred-repair progress while capture finalization is running
+* texture-aware 3×3 target-region sharpness analysis with separate low-texture guidance
+* bounded scene-adaptive sharpness threshold with a 0.38 absolute floor
+* sampled 128×128 rejected-candidate crops for auditable quality calibration without per-rejection write pressure
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (47 tests)
+npm test        PASS (53 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -97,6 +101,9 @@ Hardware and reconstruction evidence:
 * 720-pixel deferred replay with 600 features and a 0.84 ratio connects 113/113 frames, verifies three loop closures, retains 27.0 MB grayscale, and completes deferred desktop work in 11.2 seconds
 * independent refined poses score the three graph-bridging loop edges at 0.77, 1.13, and 1.69 pixels, confirming real overlap rather than false closures
 * regression replay remains 105/105 with zero loops on the seesaw and 145/145 with six independently validated loops on the second capture
+* a 51-frame bicycle capture validates 0.266-second candidate cadence, 63 ms mean/125.5 ms maximum capture-worker time, and 51/51 live visual connectivity
+* that capture rejects 110/178 candidates as blur in three long viewpoint-dependent runs despite lower rejected-frame motion and visually usable accepted images, proving the single absolute Laplacian threshold confounds texture with focus
+* the bicycle capture finishes 2.18 m from its starting camera and has no loop closure; final low-score runs starved the intended coverage rather than exposing a graph-repair failure
 
 M2 calibration findings:
 
@@ -105,6 +112,8 @@ M2 calibration findings:
 * an independent Laplacian measurement found approximately 1.7× variation between the softest and sharpest source frames.
 * recalibrated sharpness replay spans 0.370–0.836 and rejects 7 of 118 candidates (5.9%) at the provisional 0.50 threshold.
 * motion replay rejects 39 of 118 candidates (33.1%) at 0.40 m/s or 0.45 rad/s; the initially proposed tighter limits would have rejected approximately 90% and were discarded.
+* a universal sharpness threshold also fails in the opposite direction: the bicycle capture rejects 61.8% at 0.50, while provisional floors of 0.42 and 0.40 would reject 19.7% and 11.8% before multi-region adaptation.
+* variance of Laplacian measures available high-frequency energy, not focus independently; smooth objects, blank backgrounds, crop placement, and backlighting require separate texture confidence and scene adaptation.
 * the seesaw was confirmed rigid during capture; scene motion is not the explanation for duplication.
 * after global similarity alignment, COLMAP and WebXR poses differ by a median 1.6 cm and 0.92 degrees.
 * COLMAP refined focal lengths by approximately 1.5% and estimated non-zero radial/tangential distortion omitted by the WebXR pinhole export.

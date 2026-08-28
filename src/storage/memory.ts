@@ -20,11 +20,16 @@ export class MemoryCaptureStore implements CapturePersistence {
       imu: [],
       images: new Map(),
       depths: new Map(),
+      candidatePreviews: new Map(),
     });
   }
 
-  async appendDecision(captureId: string, decision: CaptureDecision): Promise<void> {
-    this.require(captureId).decisions.push(structuredClone(decision));
+  async appendDecision(captureId: string, decision: CaptureDecision, preview?: Blob): Promise<void> {
+    const dataset = this.require(captureId);
+    dataset.decisions.push(structuredClone(decision));
+    if (preview) {
+      dataset.candidatePreviews?.set(`debug/rejected/${pad(decision.candidateId)}.jpg`, preview);
+    }
   }
 
   async appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void> {
@@ -60,6 +65,7 @@ export class MemoryCaptureStore implements CapturePersistence {
       imu: structuredClone(dataset.imu),
       images: new Map(dataset.images),
       depths: new Map(dataset.depths),
+      candidatePreviews: new Map(dataset.candidatePreviews),
       visualTracking: dataset.visualTracking ? structuredClone(dataset.visualTracking) : undefined,
     };
   }
@@ -79,4 +85,8 @@ export class MemoryCaptureStore implements CapturePersistence {
     if (!dataset) throw new Error(`Capture not found: ${captureId}`);
     return dataset;
   }
+}
+
+function pad(value: number): string {
+  return String(value).padStart(6, "0");
 }

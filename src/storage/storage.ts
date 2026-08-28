@@ -11,7 +11,7 @@ export interface CapturePersistence {
   readonly kind: "opfs" | "memory";
   createCapture(metadata: CaptureMetadata): Promise<void>;
   appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void>;
-  appendDecision(captureId: string, decision: CaptureDecision): Promise<void>;
+  appendDecision(captureId: string, decision: CaptureDecision, preview?: Blob): Promise<void>;
   appendImu(captureId: string, samples: IMUSample[]): Promise<void>;
   saveVisualTracking(captureId: string, report: VisualTrackingReport): Promise<void>;
   finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void>;

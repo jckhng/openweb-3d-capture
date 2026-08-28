@@ -3,6 +3,10 @@ import type { CaptureDecision, CaptureDecisionReason, Matrix4 } from "../shared/
 
 export interface QualitySelectorConfig {
   minimumSharpness: number;
+  maximumAdaptiveSharpness: number;
+  adaptiveSharpnessRatio: number;
+  minimumTexture: number;
+  sharpnessHistoryLength: number;
   minimumTargetDistance: number;
   maximumLinearVelocity: number;
   maximumAngularVelocity: number;
@@ -11,7 +15,11 @@ export interface QualitySelectorConfig {
 }
 
 export const DEFAULT_QUALITY_SELECTOR_CONFIG: Readonly<QualitySelectorConfig> = {
-  minimumSharpness: 0.5,
+  minimumSharpness: 0.38,
+  maximumAdaptiveSharpness: 0.5,
+  adaptiveSharpnessRatio: 0.68,
+  minimumTexture: 0.12,
+  sharpnessHistoryLength: 32,
   minimumTargetDistance: 0.45,
   // Replaying the first rigid M2 orbit rejects 33% of candidates at these limits.
   maximumLinearVelocity: 0.4,
@@ -28,12 +36,14 @@ export interface QualityCandidate {
   imageAvailable: boolean;
   imageSynchronized: boolean;
   sharpnessScore: number;
+  textureScore: number;
   targetDistance?: number;
 }
 
 export class QualityKeyframeSelector {
   private previousCandidate?: Pick<QualityCandidate, "timestamp" | "cameraToWorld">;
   private previousAccepted?: Pick<QualityCandidate, "timestamp" | "cameraToWorld">;
+  private readonly recentSharpness: number[] = [];
 
   constructor(private readonly config: QualitySelectorConfig = DEFAULT_QUALITY_SELECTOR_CONFIG) {
     validateConfig(config);
@@ -43,6 +53,8 @@ export class QualityKeyframeSelector {
     const motion = this.measureMotion(candidate);
     const novelty = this.measureNovelty(candidate);
     const sharpnessScore = clamp01(candidate.sharpnessScore);
+    const textureScore = clamp01(candidate.textureScore);
+    const sharpnessThreshold = this.sharpnessThreshold();
     const blurScore = 1 - sharpnessScore;
     const motionScore = Math.max(
       motion.linearVelocity / this.config.maximumLinearVelocity,
@@ -55,7 +67,14 @@ export class QualityKeyframeSelector {
       )
       : 1;
 
-    const reason = this.rejectionReason(candidate, sharpnessScore, motionScore, noveltyScore);
+    const reason = this.rejectionReason(
+      candidate,
+      sharpnessScore,
+      textureScore,
+      sharpnessThreshold,
+      motionScore,
+      noveltyScore,
+    );
     const decision: CaptureDecision = {
       candidateId: candidate.candidateId,
       timestamp: candidate.timestamp,
@@ -64,6 +83,8 @@ export class QualityKeyframeSelector {
       trackingState: candidate.trackingState,
       cameraToWorld: candidate.cameraToWorld.map((row) => [...row]),
       sharpnessScore,
+      textureScore,
+      sharpnessThreshold,
       linearVelocity: motion.linearVelocity,
       angularVelocity: motion.angularVelocity,
       translationNovelty: novelty.translation,
@@ -80,6 +101,15 @@ export class QualityKeyframeSelector {
       timestamp: candidate.timestamp,
       cameraToWorld: candidate.cameraToWorld.map((row) => [...row]),
     };
+    if (
+      candidate.trackingState === "tracked" &&
+      candidate.imageAvailable &&
+      candidate.imageSynchronized &&
+      textureScore >= this.config.minimumTexture
+    ) {
+      this.recentSharpness.push(sharpnessScore);
+      if (this.recentSharpness.length > this.config.sharpnessHistoryLength) this.recentSharpness.shift();
+    }
     return decision;
   }
 
@@ -113,6 +143,8 @@ export class QualityKeyframeSelector {
   private rejectionReason(
     candidate: QualityCandidate,
     sharpnessScore: number,
+    textureScore: number,
+    sharpnessThreshold: number,
     motionScore: number,
     noveltyScore: number,
   ): CaptureDecisionReason {
@@ -124,10 +156,20 @@ export class QualityKeyframeSelector {
       candidate.targetDistance > 0 &&
       candidate.targetDistance < this.config.minimumTargetDistance
     ) return "too-close";
-    if (sharpnessScore < this.config.minimumSharpness) return "blur";
+    if (textureScore < this.config.minimumTexture) return "low-texture";
+    if (sharpnessScore < sharpnessThreshold) return "blur";
     if (motionScore > 1) return "motion";
     if (this.previousAccepted && noveltyScore < 1) return "redundant";
     return "accepted";
+  }
+
+  private sharpnessThreshold(): number {
+    if (this.recentSharpness.length < 4) return this.config.minimumSharpness;
+    const baseline = percentile(this.recentSharpness, 0.75);
+    return Math.max(
+      this.config.minimumSharpness,
+      Math.min(this.config.maximumAdaptiveSharpness, baseline * this.config.adaptiveSharpnessRatio),
+    );
   }
 }
 
@@ -135,9 +177,22 @@ function validateConfig(config: QualitySelectorConfig): void {
   for (const [name, value] of Object.entries(config)) {
     if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
   }
-  if (config.minimumSharpness > 1) throw new Error("minimumSharpness must not exceed 1");
+  if (config.minimumSharpness > 1 || config.maximumAdaptiveSharpness > 1 || config.minimumTexture > 1) {
+    throw new Error("Normalized quality thresholds must not exceed 1");
+  }
+  if (config.maximumAdaptiveSharpness < config.minimumSharpness) {
+    throw new Error("Maximum adaptive sharpness must not be below minimum sharpness");
+  }
+  if (!Number.isInteger(config.sharpnessHistoryLength)) {
+    throw new Error("Sharpness history length must be an integer");
+  }
 }
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
+
+function percentile(values: number[], fraction: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) * fraction)] ?? 0;
 }

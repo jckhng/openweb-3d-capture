@@ -34,6 +34,7 @@ h1 { margin: 0.15rem 0 0.35rem; font-size: clamp(2rem, 8vw, 4rem); line-height: 
 h2 { margin: 0; font-size: 1.05rem; letter-spacing: 0.02em; }
 h3 { margin: 0 0 0.65rem; font-size: 0.86rem; color: #94a3b8; }
 .eyebrow { color: #38bdf8; text-transform: uppercase; letter-spacing: 0.16em; font-weight: 750; }
+.header-build-id { margin: 0.45rem 0 0; color: #7dd3fc; font: 0.78rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .lede, .muted { color: #94a3b8; }
 
 section {
@@ -46,6 +47,7 @@ section {
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
 .capture-panel { border-color: #075985; background: linear-gradient(150deg, #111827 30%, #082f49); }
+.build-id { margin: 0 0 0.65rem; color: #7dd3fc; font: 0.7rem ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
 .capture-status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; }
 .capture-status > div { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.55rem; background: rgb(7 12 20 / 72%); }
 .capture-status span { color: #94a3b8; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -116,6 +118,7 @@ main.xr-active .capture-panel {
 }
 
 main.xr-active .capture-status { grid-template-columns: repeat(3, 1fr); }
+main.xr-active .build-id { margin-bottom: 0.45rem; font-size: 0.6rem; }
 main.xr-active .capture-status > div { padding: 0.45rem 0.6rem; background: rgb(2 6 23 / 55%); }
 main.xr-active .capture-status strong { font-size: 1.2rem; }
 main.xr-active .capture-instruction { min-height: 0; margin: 0.6rem 0; font-size: 0.85rem; }

@@ -22,14 +22,20 @@ export class OPFSCaptureStore implements CapturePersistence {
     await directory.getDirectoryHandle("depth", { create: true });
     await directory.getDirectoryHandle("telemetry", { create: true });
     await directory.getDirectoryHandle("debug", { create: true });
+    const debug = await directory.getDirectoryHandle("debug");
+    await debug.getDirectoryHandle("rejected", { create: true });
     await directory.getDirectoryHandle("refinement", { create: true });
     await writeJson(directory, "capture.json", metadata);
   }
 
-  async appendDecision(captureId: string, decision: CaptureDecision): Promise<void> {
+  async appendDecision(captureId: string, decision: CaptureDecision, preview?: Blob): Promise<void> {
     const directory = await this.captureDirectory(captureId);
     const debugDirectory = await directory.getDirectoryHandle("debug");
     await writeJson(debugDirectory, `${pad(decision.candidateId)}.json`, decision);
+    if (preview) {
+      const rejected = await debugDirectory.getDirectoryHandle("rejected", { create: true });
+      await writeFile(rejected, `${pad(decision.candidateId)}.jpg`, preview);
+    }
   }
 
   async appendFrame(captureId: string, frame: CaptureFrame, image?: Blob, depth?: Blob): Promise<void> {
@@ -105,6 +111,7 @@ export class OPFSCaptureStore implements CapturePersistence {
     }
 
     const decisions: CaptureDecision[] = [];
+    const candidatePreviews = new Map<string, Blob>();
     try {
       const debugDirectory = await directory.getDirectoryHandle("debug");
       const decisionNames: string[] = [];
@@ -114,6 +121,16 @@ export class OPFSCaptureStore implements CapturePersistence {
       decisionNames.sort();
       for (const name of decisionNames) {
         decisions.push(await readJson<CaptureDecision>(debugDirectory, name));
+      }
+      try {
+        const rejected = await debugDirectory.getDirectoryHandle("rejected");
+        for await (const [name, handle] of entriesOf(rejected)) {
+          if (handle.kind !== "file" || !name.endsWith(".jpg")) continue;
+          const file = await (await rejected.getFileHandle(name)).getFile();
+          candidatePreviews.set(`debug/rejected/${name}`, file);
+        }
+      } catch {
+        // Captures created before rejected preview telemetry have no thumbnails.
       }
     } catch {
       // M0/M1 captures predate quality decision telemetry.
@@ -132,7 +149,7 @@ export class OPFSCaptureStore implements CapturePersistence {
     } catch {
       // Captures created before incremental visual tracking have no report.
     }
-    return { capture, frames, decisions, imu, images, depths, visualTracking };
+    return { capture, frames, decisions, imu, images, depths, candidatePreviews, visualTracking };
   }
 
   async listCaptures(): Promise<CaptureMetadata[]> {

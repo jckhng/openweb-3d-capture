@@ -38,7 +38,7 @@ M2 test sequence:
 6. Move slowly around the object, including low, level, and elevated viewpoints.
 7. Select **Stop and save** after 50–100 accepted frames.
 8. Select **Export latest**.
-9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, images, optional depth, and IMU samples.
+9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
 10. Load the dataset into Brush or another Nerfstudio-compatible reconstruction path.
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
@@ -89,6 +89,8 @@ npm run benchmark:features -- /path/to/refined-output \
 
 The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
 
+The capture HUD shows the UTC production build time. New captures also persist it as `applicationBuild.builtAt` in `capture.json`, making stale phone deployments identifiable from both the live UI and exported ZIP.
+
 ## Current limitations
 
 - Raw WebXR camera access is an incubating, optional API. Constructor detection does not prove that a session will grant `camera-access`; the decisive signal is a non-null `view.camera` during an XR animation frame.
@@ -97,7 +99,7 @@ The production build registers a network-first service worker with offline fallb
 - M0 passed on the target phone with synchronized 886×1920 XR camera JPEGs, 160×90 CPU depth, tracked poses, IMU data, and OPFS reload recovery.
 - M1 passed with a 90-frame chair capture that produced a recognizable, upright reconstruction in Brush. Floaters remain because M1 had no quality selection or seed point cloud.
 - M2 selection is implemented but requires one more target-phone capture before acceptance. The first M2 seesaw capture accepted 105 of 118 candidates and exposed saturated blur scores plus overly permissive motion limits.
-- Blur normalization and motion limits have been recalibrated from that telemetry. Replay predicts 5.9% blur rejection and 33.1% motion rejection; these predictions require a live capture test.
+- A later bicycle capture showed that one absolute center-crop Laplacian threshold confuses smooth or backlit content with blur, rejecting 110/178 candidates despite low motion and usable accepted images. Quality analysis now uses nine target-region tiles, reports low texture separately, adapts against recent detailed views above a 0.38 floor, and exports every fourth rejected-candidate crop under `debug/rejected/` for calibration without restoring capture backpressure.
 - ARCore commonly uses fixed focus for tracking, and WebXR exposes no autofocus, lens-selection, or manual-focus control. The recorder therefore reports center depth and rejects targets closer than a provisional 45 cm focus floor. This cannot restore detail that was optically blurred.
 - Web v1 should be treated as a medium-object capture path until the 45 cm floor and minimum usable object size are measured on the target phone. Reliable close-range small-object capture likely requires a native Android path with camera focus control.
 - WebXR poses are retained as metric priors, not assumed to be reconstruction-grade final poses. Independent COLMAP refinement registers all 105 seesaw frames and all 145 frames of the second phone capture, while correcting poses, focal length, and lens distortion.
