@@ -179,6 +179,13 @@ export interface VisualTrackingReport {
     capturePhaseMaximumFrameMilliseconds: number;
     deferredRefinementMilliseconds: number;
     retainedGrayBytes: number;
+    captureMaximumDimension?: number;
+    deferredMaximumDimension?: number;
+    deferredMaximumFeatures?: number;
+    deferredMatchRatio?: number;
+    phase?: "capture" | "deferred" | "complete";
+    deferredRepairAttempts?: number;
+    deferredMaximumRepairAttempts?: number;
   };
   edges: VisualTrackingEdge[];
 }

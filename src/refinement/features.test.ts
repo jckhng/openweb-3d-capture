@@ -4,6 +4,7 @@ import {
   extractBriefFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
+  resizeGray,
   type GrayImage,
 } from "./features";
 
@@ -38,6 +39,20 @@ function texture(shiftX = 0): GrayImage {
 }
 
 describe("low-resolution feature tracking", () => {
+  it("retains aspect ratio when deriving the capture image from deferred grayscale", () => {
+    const source: GrayImage = {
+      width: 90,
+      height: 180,
+      data: Uint8Array.from({ length: 90 * 180 }, (_, index) => index % 256),
+    };
+    const resized = resizeGray(source, 60);
+    expect(resized.width).toBe(30);
+    expect(resized.height).toBe(60);
+    expect(resized.data).toHaveLength(30 * 60);
+    expect(resizeGray(resized, 120)).toBe(resized);
+    expect(() => resizeGray(source, 16)).toThrow(/at least 17/);
+  });
+
   it("supports a lightweight single-scale capture phase", () => {
     const features = extractBriefFeatures(checkerboard(), { maximumFeatures: 100, cellSize: 8 });
     expect(features.length).toBeGreaterThan(20);

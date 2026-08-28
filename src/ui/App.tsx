@@ -182,7 +182,13 @@ export function App() {
         </details>
       </section>
 
-      {busy ? <p className="busy" aria-live="polite">{busy}</p> : null}
+      {busy ? (
+        <p className="busy" aria-live="polite">
+          {busy === "saving capture"
+            ? `${busy} — ${formatVisualProcessing(snapshot.visualTracking)}`
+            : busy}
+        </p>
+      ) : null}
 
       <section className="debug-section">
         <div className="section-heading">
@@ -235,6 +241,10 @@ export function App() {
           />
           <Metric label="visual components" value={snapshot.visualTracking.componentCount} />
           <Metric label="loop closures" value={snapshot.visualTracking.loopClosures} />
+          <Metric
+            label="visual processing"
+            value={formatVisualProcessing(snapshot.visualTracking)}
+          />
           <Metric
             label="capture worker mean"
             value={formatWorkerMean(snapshot.visualTracking)}
@@ -387,6 +397,15 @@ function formatWorkerMean(report: DiagnosticSnapshot["visualTracking"]) {
   const processing = report.processing;
   if (!processing || processing.capturePhaseFrames === 0) return "unavailable";
   return `${(processing.capturePhaseTotalMilliseconds / processing.capturePhaseFrames).toFixed(0)} ms`;
+}
+
+function formatVisualProcessing(report: DiagnosticSnapshot["visualTracking"]) {
+  const processing = report.processing;
+  if (!processing?.phase) return "unavailable";
+  if (processing.phase !== "deferred") return processing.phase;
+  const attempts = processing.deferredRepairAttempts ?? 0;
+  const maximum = processing.deferredMaximumRepairAttempts;
+  return maximum === undefined ? "deferred" : `deferred repair ${attempts} / ${maximum}`;
 }
 
 function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision"]) {

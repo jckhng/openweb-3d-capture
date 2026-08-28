@@ -57,7 +57,7 @@ export function extractImageFeatures(
   const candidates: PyramidCandidate[] = [];
 
   for (const scale of PYRAMID_SCALES) {
-    const level = scale === 1 ? image : resizeGray(image, scale);
+    const level = scale === 1 ? image : resizeGrayByScale(image, scale);
     const levelCandidates: Array<Pick<PyramidCandidate, "x" | "y" | "score">> = [];
     for (let y = BRIEF_RADIUS; y < level.height - BRIEF_RADIUS; y += 1) {
       for (let x = BRIEF_RADIUS; x < level.width - BRIEF_RADIUS; x += 1) {
@@ -394,7 +394,20 @@ function createBriefPairs(count: number): Array<readonly [number, number, number
   return Array.from({ length: count }, () => [next(), next(), next(), next()] as const);
 }
 
-function resizeGray(image: GrayImage, scale: number): GrayImage {
+export function resizeGray(
+  image: GrayImage,
+  maximumDimension: number,
+): GrayImage {
+  validateImage(image);
+  if (!Number.isFinite(maximumDimension) || maximumDimension < 17) {
+    throw new Error("Maximum grayscale dimension must be at least 17 pixels");
+  }
+  const scale = Math.min(1, maximumDimension / Math.max(image.width, image.height));
+  if (scale === 1) return image;
+  return resizeGrayByScale(image, scale);
+}
+
+function resizeGrayByScale(image: GrayImage, scale: number): GrayImage {
   const width = Math.max(17, Math.round(image.width * scale));
   const height = Math.max(17, Math.round(image.height * scale));
   const data = new Uint8Array(width * height);

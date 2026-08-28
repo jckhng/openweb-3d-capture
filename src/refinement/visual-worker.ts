@@ -3,6 +3,7 @@ import {
   extractImageFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
+  resizeGray,
   type GrayImage,
   type ImageFeature,
 } from "./features";
@@ -20,21 +21,24 @@ import type {
 } from "./worker-protocol";
 import type { Intrinsics, Matrix4, VisualTrackingEdge } from "../shared/types";
 
-const MAXIMUM_DIMENSION = 480;
+const CAPTURE_MAXIMUM_DIMENSION = 480;
+const DEFERRED_MAXIMUM_DIMENSION = 720;
 const MAXIMUM_FEATURES = 450;
+const MAXIMUM_DEFERRED_FEATURES = 600;
+const DEFERRED_MATCH_RATIO = 0.84;
 const MAXIMUM_RETAINED_FRAMES = 160;
 const MINIMUM_LOOP_SEPARATION = 48;
-const MAXIMUM_REPAIR_ATTEMPTS = 48;
+const MAXIMUM_REPAIR_ATTEMPTS = 96;
 
 interface TrackedFrame {
   id: number;
-  width: number;
-  height: number;
   sourceWidth: number;
   sourceHeight: number;
   intrinsics: Intrinsics;
   cameraToWorld: Matrix4;
-  image: GrayImage;
+  briefWidth: number;
+  briefHeight: number;
+  repairImage: GrayImage;
   briefFeatures: ImageFeature[];
   strongFeatures?: ImageFeature[];
 }
@@ -51,6 +55,8 @@ let queue = Promise.resolve();
 let capturePhaseTotalMilliseconds = 0;
 let capturePhaseMaximumFrameMilliseconds = 0;
 let deferredRefinementMilliseconds = 0;
+let processingPhase: "capture" | "deferred" | "complete" = "capture";
+let deferredRepairAttempts = 0;
 
 scope.onmessage = (event) => {
   queue = queue.then(async () => {
@@ -62,6 +68,8 @@ scope.onmessage = (event) => {
       capturePhaseTotalMilliseconds = 0;
       capturePhaseMaximumFrameMilliseconds = 0;
       deferredRefinementMilliseconds = 0;
+      processingPhase = "capture";
+      deferredRepairAttempts = 0;
       scope.postMessage({ type: "update", report: reportWithProcessing() });
       return;
     }
@@ -71,9 +79,14 @@ scope.onmessage = (event) => {
       return;
     }
     const deferredStarted = performance.now();
+    processingPhase = "deferred";
+    scope.postMessage({ type: "update", report: reportWithProcessing() });
     addDeferredLoopEdges();
-    repairDisconnectedGraph();
     deferredRefinementMilliseconds = performance.now() - deferredStarted;
+    scope.postMessage({ type: "update", report: reportWithProcessing() });
+    repairDisconnectedGraph(deferredStarted);
+    deferredRefinementMilliseconds = performance.now() - deferredStarted;
+    processingPhase = "complete";
     scope.postMessage({
       type: "finished",
       requestId: event.data.requestId,
@@ -90,17 +103,23 @@ scope.onmessage = (event) => {
 async function trackFrame(input: VisualTrackingFrameInput): Promise<void> {
   const started = performance.now();
   graph.addFrame(input.id);
-  const image = await decodeGray(input.image, input.width, input.height);
+  const repairImage = await decodeGray(
+    input.image,
+    input.width,
+    input.height,
+    DEFERRED_MAXIMUM_DIMENSION,
+  );
+  const briefImage = resizeGray(repairImage, CAPTURE_MAXIMUM_DIMENSION);
   const frame: TrackedFrame = {
     id: input.id,
-    width: image.width,
-    height: image.height,
     sourceWidth: input.width,
     sourceHeight: input.height,
     intrinsics: input.intrinsics,
     cameraToWorld: input.cameraToWorld,
-    image,
-    briefFeatures: extractBriefFeatures(image, {
+    briefWidth: briefImage.width,
+    briefHeight: briefImage.height,
+    repairImage,
+    briefFeatures: extractBriefFeatures(briefImage, {
       maximumFeatures: MAXIMUM_FEATURES,
       fastThreshold: 18,
       cellSize: 12,
@@ -133,7 +152,7 @@ function matchEdge(
   const featuresA = matcher === "gradient" ? strongFeatures(a) : a.briefFeatures;
   const featuresB = matcher === "gradient" ? strongFeatures(b) : b.briefFeatures;
   const matches = matcher === "gradient"
-    ? matchScaleInvariantFeatures(featuresA, featuresB)
+    ? matchScaleInvariantFeatures(featuresA, featuresB, DEFERRED_MATCH_RATIO)
     : matchImageFeatures(featuresA, featuresB);
   const pointMatches = matches.map((match) => ({
     pointA: sourcePoint(featuresA[match.featureA], a),
@@ -185,14 +204,21 @@ function reportWithProcessing() {
     capturePhaseTotalMilliseconds,
     capturePhaseMaximumFrameMilliseconds,
     deferredRefinementMilliseconds,
-    retainedGrayBytes: retained.reduce((sum, frame) => sum + frame.image.data.byteLength, 0),
+    retainedGrayBytes: retained.reduce((sum, frame) => sum + frame.repairImage.data.byteLength, 0),
+    captureMaximumDimension: CAPTURE_MAXIMUM_DIMENSION,
+    deferredMaximumDimension: DEFERRED_MAXIMUM_DIMENSION,
+    deferredMaximumFeatures: MAXIMUM_DEFERRED_FEATURES,
+    deferredMatchRatio: DEFERRED_MATCH_RATIO,
+    phase: processingPhase,
+    deferredRepairAttempts,
+    deferredMaximumRepairAttempts: MAXIMUM_REPAIR_ATTEMPTS,
   };
   return report;
 }
 
 function strongFeatures(frame: TrackedFrame): ImageFeature[] {
-  frame.strongFeatures ??= extractImageFeatures(frame.image, {
-    maximumFeatures: MAXIMUM_FEATURES,
+  frame.strongFeatures ??= extractImageFeatures(frame.repairImage, {
+    maximumFeatures: MAXIMUM_DEFERRED_FEATURES,
     fastThreshold: 18,
     cellSize: 12,
   });
@@ -227,7 +253,7 @@ function addDeferredLoopEdges(): void {
   }
 }
 
-function repairDisconnectedGraph(): void {
+function repairDisconnectedGraph(deferredStarted: number): void {
   if (graph.componentCount() <= 1) return;
   const distanceLimit = overlapDistanceLimit(retained);
   const candidates: Array<{ a: TrackedFrame; b: TrackedFrame; kind: VisualTrackingEdge["kind"]; score: number }> = [];
@@ -237,17 +263,20 @@ function repairDisconnectedGraph(): void {
       const b = retained[indexB];
       if (attemptedPairs.has(pairKey(a.id, b.id))) continue;
       const separation = Math.abs(a.id - b.id);
-      const isRecovery = separation <= 8;
       const isLoop = separation >= MINIMUM_LOOP_SEPARATION;
-      if (!isRecovery && !isLoop) continue;
-      const score = overlapCost(
+      const overlap = overlapCost(
         a,
         b,
         isLoop ? 0.65 : 0.35,
         isLoop ? distanceLimit : distanceLimit * 0.75,
       );
-      if (Number.isFinite(score)) {
-        candidates.push({ a, b, kind: isLoop ? "loop" : "recovery", score });
+      if (Number.isFinite(overlap)) {
+        candidates.push({
+          a,
+          b,
+          kind: isLoop ? "loop" : "recovery",
+          score: recoveryTier(separation) * 10 + overlap,
+        });
       }
     }
   }
@@ -258,7 +287,19 @@ function repairDisconnectedGraph(): void {
     if (graph.areConnected(candidate.a.id, candidate.b.id)) continue;
     graph.addEdge(addStrongEdge(candidate.a, candidate.b, candidate.kind));
     attempts += 1;
+    deferredRepairAttempts = attempts;
+    if (attempts % 8 === 0) {
+      deferredRefinementMilliseconds = performance.now() - deferredStarted;
+      scope.postMessage({ type: "update", report: reportWithProcessing() });
+    }
   }
+}
+
+function recoveryTier(separation: number): number {
+  if (separation === 1) return 0;
+  if (separation <= 8) return 1;
+  if (separation < MINIMUM_LOOP_SEPARATION) return 2;
+  return 3;
 }
 
 function overlapCost(
@@ -310,16 +351,25 @@ function dot(a: [number, number, number], b: [number, number, number]): number {
 
 function sourcePoint(feature: ImageFeature, frame: TrackedFrame): [number, number] {
   return [
-    feature.x * frame.sourceWidth / frame.width,
-    feature.y * frame.sourceHeight / frame.height,
+    feature.x * frame.sourceWidth / (feature.gradientDescriptor ? frame.repairImage.width : frame.briefWidth),
+    feature.y * frame.sourceHeight / (feature.gradientDescriptor ? frame.repairImage.height : frame.briefHeight),
   ];
 }
 
-async function decodeGray(blob: Blob, sourceWidth: number, sourceHeight: number): Promise<GrayImage> {
-  const scale = Math.min(1, MAXIMUM_DIMENSION / Math.max(sourceWidth, sourceHeight));
+async function decodeGray(
+  blob: Blob,
+  sourceWidth: number,
+  sourceHeight: number,
+  maximumDimension: number,
+): Promise<GrayImage> {
+  const scale = Math.min(1, maximumDimension / Math.max(sourceWidth, sourceHeight));
   const width = Math.max(17, Math.round(sourceWidth * scale));
   const height = Math.max(17, Math.round(sourceHeight * scale));
-  const bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeHeight: height });
+  const bitmap = await createImageBitmap(blob, {
+    resizeWidth: width,
+    resizeHeight: height,
+    resizeQuality: "high",
+  });
   try {
     const canvas = new OffscreenCanvas(width, height);
     const context = canvas.getContext("2d", { willReadFrequently: true });

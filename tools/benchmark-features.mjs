@@ -8,6 +8,7 @@ import {
   extractImageFeatures,
   matchImageFeatures,
   matchScaleInvariantFeatures,
+  resizeGray,
 } from "../src/refinement/features.ts";
 import { scoreEpipolarConsistency } from "../src/refinement/reprojection.ts";
 import { VisualConnectivityGraph } from "../src/refinement/visual-graph.ts";
@@ -18,9 +19,13 @@ const arguments_ = process.argv.slice(2);
 const outputIndex = arguments_.indexOf("--output");
 const outputPath = outputIndex >= 0 ? path.resolve(arguments_[outputIndex + 1]) : undefined;
 if (outputIndex >= 0) arguments_.splice(outputIndex, 2);
+const deferredDimension = integerOption(arguments_, "--deferred-dimension", 720);
+const captureDimension = integerOption(arguments_, "--capture-dimension", 480);
+const deferredFeatures = integerOption(arguments_, "--deferred-features", 600);
+const gradientRatio = numberOption(arguments_, "--gradient-ratio", 0.84);
 const captureDirectory = arguments_[0] ? path.resolve(arguments_[0]) : undefined;
 if (!captureDirectory) {
-  console.error("Usage: npm run benchmark:features -- <capture-directory> [--output report.json]");
+  console.error("Usage: npm run benchmark:features -- <capture-directory> [--capture-dimension 480] [--deferred-dimension 720] [--output report.json]");
   process.exit(2);
 }
 
@@ -32,21 +37,30 @@ const frames = fs.readFileSync(path.join(captureDirectory, "telemetry", "frames.
 const refinementPath = path.join(captureDirectory, "refinement.json");
 const refinement = fs.existsSync(refinementPath) ? JSON.parse(fs.readFileSync(refinementPath, "utf8")) : undefined;
 const decodeStarted = performance.now();
-const decoded = frames.map((frame) => decodeGray(
-  path.join(captureDirectory, frame.imagePath),
-  frame.width,
-  frame.height,
-));
-const extractionStarted = performance.now();
+const decoded = [];
+const captureDecoded = [];
 const capturePhaseFrameMilliseconds = [];
-const briefFeatures = decoded.map((image) => {
+for (const frame of frames) {
+  const started = performance.now();
+  const image = decodeGray(
+    path.join(captureDirectory, frame.imagePath),
+    frame.width,
+    frame.height,
+    deferredDimension,
+  );
+  decoded.push(image);
+  captureDecoded.push(resizeGray(image, captureDimension));
+  capturePhaseFrameMilliseconds.push(performance.now() - started);
+}
+const extractionStarted = performance.now();
+const briefFeatures = captureDecoded.map((image, index) => {
   const started = performance.now();
   const features = extractBriefFeatures(image, {
     maximumFeatures: 450,
     fastThreshold: 18,
     cellSize: 12,
   });
-  capturePhaseFrameMilliseconds.push(performance.now() - started);
+  capturePhaseFrameMilliseconds[index] += performance.now() - started;
   return features;
 });
 const matchingStarted = performance.now();
@@ -56,7 +70,7 @@ const featuresFor = (index, matcher) => {
   let features = strongFeatureCache.get(index);
   if (!features) {
     features = extractImageFeatures(decoded[index], {
-      maximumFeatures: 450,
+      maximumFeatures: deferredFeatures,
       fastThreshold: 18,
       cellSize: 12,
     });
@@ -69,11 +83,19 @@ const scorePair = ([indexA, indexB, kind, matcher = "brief"]) => {
   const featuresA = featuresFor(indexA, matcher);
   const featuresB = featuresFor(indexB, matcher);
   const matches = matcher === "gradient"
-    ? matchScaleInvariantFeatures(featuresA, featuresB)
+    ? matchScaleInvariantFeatures(featuresA, featuresB, gradientRatio)
     : matchImageFeatures(featuresA, featuresB);
   const pointMatches = matches.map((match) => ({
-    pointA: sourcePoint(featuresA[match.featureA], decoded[indexA], frames[indexA]),
-    pointB: sourcePoint(featuresB[match.featureB], decoded[indexB], frames[indexB]),
+    pointA: sourcePoint(
+      featuresA[match.featureA],
+      matcher === "gradient" ? decoded[indexA] : captureDecoded[indexA],
+      frames[indexA],
+    ),
+    pointB: sourcePoint(
+      featuresB[match.featureB],
+      matcher === "gradient" ? decoded[indexB] : captureDecoded[indexB],
+      frames[indexB],
+    ),
   }));
   const verification = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
   const inlierMatches = verification.inlierIndices.map((index) => pointMatches[index]);
@@ -154,10 +176,14 @@ const loopUsable = usable.filter((pair) => pair.kind === "loop");
 const visualTracking = graph.report();
 visualTracking.processing = {
   capturePhaseFrames: frames.length,
-  capturePhaseTotalMilliseconds: capturePhaseCompleted - extractionStarted,
+  capturePhaseTotalMilliseconds: capturePhaseCompleted - decodeStarted,
   capturePhaseMaximumFrameMilliseconds: Math.max(0, ...capturePhaseFrameMilliseconds),
   deferredRefinementMilliseconds: deferredRefinementCompleted - capturePhaseCompleted,
   retainedGrayBytes: decoded.reduce((sum, image) => sum + image.data.byteLength, 0),
+  captureMaximumDimension: captureDimension,
+  deferredMaximumDimension: deferredDimension,
+  deferredMaximumFeatures: deferredFeatures,
+  deferredMatchRatio: gradientRatio,
 };
 if (visualTracking.readyForCalibration) {
   visualTracking.calibrationEstimate = estimateSharedCalibration(
@@ -174,10 +200,13 @@ const report = {
   version: 1,
   captureDirectory,
   configuration: {
-    maximumDimension: 480,
-    maximumFeatures: 450,
+    captureMaximumDimension: captureDimension,
+    deferredMaximumDimension: deferredDimension,
+    captureMaximumFeatures: 450,
+    deferredMaximumFeatures: deferredFeatures,
+    gradientRatio,
     descriptor: "capture: single-scale oriented BRIEF-256; stop-time: multi-scale gradient-128",
-    matcher: "capture-phase mutual Hamming 0.8; deferred unique gradient L2 0.78 for repair/loops",
+    matcher: `capture-phase mutual Hamming 0.8; deferred unique gradient L2 ${gradientRatio.toFixed(2)} for repair/loops`,
     minimumUsableMatches: 12,
   },
   frames: frames.length,
@@ -228,26 +257,38 @@ function repairDisconnectedGraph() {
     for (let b = a + 1; b < frames.length; b += 1) {
       if (attemptedStrongPairs.has(pairKey(frames[a].id, frames[b].id))) continue;
       const separation = b - a;
-      const recovery = separation <= 8;
       const loop = separation >= 48;
-      if (!recovery && !loop) continue;
-      const score = overlapCost(
+      const overlap = overlapCost(
         frames[a],
         frames[b],
         loop ? 0.65 : 0.35,
         loop ? maximumDistance : maximumDistance * 0.75,
       );
-      if (Number.isFinite(score)) candidates.push({ a, b, kind: loop ? "loop" : "recovery", score });
+      if (Number.isFinite(overlap)) {
+        candidates.push({
+          a,
+          b,
+          kind: loop ? "loop" : "recovery",
+          score: recoveryTier(separation) * 10 + overlap,
+        });
+      }
     }
   }
   candidates.sort((first, second) => first.score - second.score);
   let attempts = 0;
   for (const candidate of candidates) {
-    if (graph.componentCount() <= 1 || attempts >= 48) break;
+    if (graph.componentCount() <= 1 || attempts >= 96) break;
     if (graph.areConnected(candidate.a, candidate.b)) continue;
     addPair([candidate.a, candidate.b, candidate.kind, "gradient"]);
     attempts += 1;
   }
+}
+
+function recoveryTier(separation) {
+  if (separation === 1) return 0;
+  if (separation <= 8) return 1;
+  if (separation < 48) return 2;
+  return 3;
 }
 
 function overlapCost(frameA, frameB, minimumAgreement, maximumDistance) {
@@ -284,8 +325,7 @@ function pairKey(frameA, frameB) {
   return frameA < frameB ? `${frameA}:${frameB}` : `${frameB}:${frameA}`;
 }
 
-function decodeGray(filename, sourceWidth, sourceHeight) {
-  const maximumDimension = 480;
+function decodeGray(filename, sourceWidth, sourceHeight, maximumDimension) {
   const scale = maximumDimension / Math.max(sourceWidth, sourceHeight);
   const width = Math.max(17, Math.round(sourceWidth * scale));
   const height = Math.max(17, Math.round(sourceHeight * scale));
@@ -300,6 +340,24 @@ function decodeGray(filename, sourceWidth, sourceHeight) {
     throw new Error(`Decoded grayscale size mismatch for ${filename}`);
   }
   return { width, height, data: new Uint8Array(conversion.stdout) };
+}
+
+function integerOption(values, name, fallback) {
+  const index = values.indexOf(name);
+  if (index < 0) return fallback;
+  const value = Number(values[index + 1]);
+  values.splice(index, 2);
+  if (!Number.isInteger(value) || value < 17) throw new Error(`${name} must be an integer of at least 17`);
+  return value;
+}
+
+function numberOption(values, name, fallback) {
+  const index = values.indexOf(name);
+  if (index < 0) return fallback;
+  const value = Number(values[index + 1]);
+  values.splice(index, 2);
+  if (!Number.isFinite(value)) throw new Error(`${name} must be finite`);
+  return value;
 }
 
 function sourcePoint(feature, image, frame) {

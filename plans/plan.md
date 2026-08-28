@@ -1,8 +1,8 @@
 # Project Plan: Open Web 3D Capture
 
-## 0. Implementation status — 27 August 2026
+## 0. Implementation status — 28 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. A measured phone backpressure regression has been addressed by separating lightweight capture-time tracking from deferred strong refinement. Phone validation of that fix and bounded SE(3) correction remain the required bridge to M3.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression is fixed on the target phone. A higher-resolution deferred repair pass now connects the latest difficult capture in replay. Phone validation of that repair and bounded SE(3) correction remain the required bridge to M3.
 
 Implemented:
 
@@ -45,6 +45,9 @@ Implemented:
 * bounded disconnected-component repair and stricter loop-closure classification
 * capture-time single-scale BRIEF separated from stop-time multi-scale recovery and loop matching
 * bounded retained grayscale memory and capture/deferred worker timing telemetry
+* 480-pixel live BRIEF tracking backed by retained 720-pixel grayscale for deferred repair
+* recovery across all temporal separations, prioritized from adjacent breaks through verified loops
+* visible deferred-repair progress while capture finalization is running
 
 Local verification:
 
@@ -89,6 +92,11 @@ Hardware and reconstruction evidence:
 * desktop COLMAP still registered 32/32 low-light frames, but required median corrections of 10.9 cm and 6.25 degrees; this dataset is unsuitable as evidence for direct phone training
 * deferred-refinement replay reduces capture-phase work to approximately 41 ms/frame on the 145-frame dataset while preserving 145/145 connectivity and all eight loop closures; only 45 frames require strong descriptors after stop
 * deferred seesaw replay preserves 105/105 connectivity, correctly finds no loop, and upgrades only two frames after stop
+* target-phone backpressure validation capture restores a 0.266-second median candidate interval and 0.292-second maximum interval across 113 accepted frames
+* the same capture initially leaves only 18/113 frames in the largest phone visual component even though PyCOLMAP registers 113/113 with 0.40-pixel mean reprojection error
+* 720-pixel deferred replay with 600 features and a 0.84 ratio connects 113/113 frames, verifies three loop closures, retains 27.0 MB grayscale, and completes deferred desktop work in 11.2 seconds
+* independent refined poses score the three graph-bridging loop edges at 0.77, 1.13, and 1.69 pixels, confirming real overlap rather than false closures
+* regression replay remains 105/105 with zero loops on the seesaw and 145/145 with six independently validated loops on the second capture
 
 M2 calibration findings:
 
@@ -133,7 +141,7 @@ Plan constraints clarified by implementation:
 * M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
 * WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
 * Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
-* The upgraded worker is production-built but the deferred phase split is not yet measured on the target phone. Do not start SE(3) work until a deployed capture restores sub-second candidate cadence without losing the connected graph and verified loops.
+* The deferred phase split restores sub-second candidate cadence on the target phone. Do not start SE(3) work until the higher-resolution deferred repair is deployed and confirms a connected graph without capture regression or false loops.
 * Registration percentage and reprojection error alone can produce a false-positive readiness result when features lie mainly on the background. Add minimum sampling, target-region feature support, and coverage gates before trusting desktop or phone `directTrainReady` for object capture.
 * The current approach is fail-safe but not yet universally reconstruction-robust: it preserves raw data, gates unverified refinement, and falls back to downstream SfM, but fixed-focus WebXR imposes an unrecoverable optical-quality limit for small or close subjects.
 * Do not couple the open dataset schema to one capture frontend. WebXR, an autofocus-photo fallback, and any future native precision frontend must produce the same raw/refined provenance model and downstream-compatible exports.
@@ -932,8 +940,8 @@ Offline prototype result:
 
 Next refinement bound:
 
-1. deploy the deferred-refinement build and verify candidate cadence returns below 0.5 seconds on the target phone
-2. record capture-phase maximum/mean time, deferred completion time, retained grayscale bytes, memory, and thermal behavior from a 100–150-frame orbit
+1. deploy the 720-pixel deferred-repair build and verify the latest replay gains reproduce on the target phone
+2. confirm candidate cadence remains below 0.5 seconds and record deferred time, 27–35 MB grayscale retention, memory, and thermal behavior from a 100–150-frame orbit
 3. require minimum view sampling, target-region feature support, and object coverage in the readiness gate
 4. implement bounded WebXR-regularized SE(3) corrections using only verified inlier tracks and loop closures
 5. reject the solution unless connectivity is preserved, residuals improve, and translation/rotation corrections remain inside explicit limits
