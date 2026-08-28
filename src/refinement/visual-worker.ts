@@ -19,7 +19,12 @@ import type {
   VisualWorkerRequest,
   VisualWorkerResponse,
 } from "./worker-protocol";
-import type { Intrinsics, Matrix4, VisualTrackingEdge } from "../shared/types";
+import type {
+  Intrinsics,
+  Matrix4,
+  VisualPoseConstraint,
+  VisualTrackingEdge,
+} from "../shared/types";
 
 const CAPTURE_MAXIMUM_DIMENSION = 480;
 const DEFERRED_MAXIMUM_DIMENSION = 720;
@@ -50,6 +55,7 @@ const scope = globalThis as unknown as {
 let graph = new VisualConnectivityGraph();
 let retained: TrackedFrame[] = [];
 let calibrationObservations: CalibrationObservation[] = [];
+let optimizationConstraints: VisualPoseConstraint[] = [];
 let attemptedPairs = new Set<string>();
 let queue = Promise.resolve();
 let capturePhaseTotalMilliseconds = 0;
@@ -64,6 +70,7 @@ scope.onmessage = (event) => {
       graph = new VisualConnectivityGraph();
       retained = [];
       calibrationObservations = [];
+      optimizationConstraints = [];
       attemptedPairs = new Set();
       capturePhaseTotalMilliseconds = 0;
       capturePhaseMaximumFrameMilliseconds = 0;
@@ -157,6 +164,8 @@ function matchEdge(
   const pointMatches = matches.map((match) => ({
     pointA: sourcePoint(featuresA[match.featureA], a),
     pointB: sourcePoint(featuresB[match.featureB], b),
+    featureA: canonicalFeatureId(a, matcher, match.featureA),
+    featureB: canonicalFeatureId(b, matcher, match.featureB),
   }));
   const geometry = verifyFeatureGeometry(pointMatches, a.sourceWidth, a.sourceHeight);
   const inlierMatches = geometry.inlierIndices.map((index) => pointMatches[index]);
@@ -167,6 +176,13 @@ function matchEdge(
     a.intrinsics,
   );
   if (geometry.accepted) {
+    optimizationConstraints.push({
+      frameA: a.id,
+      frameB: b.id,
+      kind,
+      matches: boundedMatches(inlierMatches, 32),
+    });
+    if (optimizationConstraints.length > 256) optimizationConstraints.shift();
     calibrationObservations.push({
       matches: boundedMatches(inlierMatches, 64),
       cameraToWorldA: a.cameraToWorld,
@@ -194,6 +210,15 @@ function finalReport() {
   if (report.readyForCalibration) {
     report.calibrationEstimate = estimateSharedCalibration(calibrationObservations);
   }
+  report.poseConstraints = optimizationConstraints.map((constraint) => ({
+    ...constraint,
+    matches: constraint.matches.map((match) => ({
+      pointA: [...match.pointA],
+      pointB: [...match.pointB],
+      featureA: match.featureA,
+      featureB: match.featureB,
+    })),
+  }));
   return report;
 }
 
@@ -223,6 +248,26 @@ function strongFeatures(frame: TrackedFrame): ImageFeature[] {
     cellSize: 12,
   });
   return frame.strongFeatures;
+}
+
+function canonicalFeatureId(
+  frame: TrackedFrame,
+  matcher: NonNullable<VisualTrackingEdge["matcher"]>,
+  featureIndex: number,
+): string {
+  if (matcher === "brief") return `brief:${featureIndex}`;
+  const point = sourcePoint(strongFeatures(frame)[featureIndex], frame);
+  let nearestIndex = -1;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < frame.briefFeatures.length; index += 1) {
+    const candidate = sourcePoint(frame.briefFeatures[index], frame);
+    const distance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+  return nearestDistance <= 5 ? `brief:${nearestIndex}` : `strong:${featureIndex}`;
 }
 
 function boundedMatches<T>(values: T[], maximum: number): T[] {

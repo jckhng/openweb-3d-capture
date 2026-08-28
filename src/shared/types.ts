@@ -101,6 +101,61 @@ export interface IMUSample {
 
 export type CaptureStatus = "incomplete" | "complete";
 
+export type CaptureReadinessStatus = "ready" | "add-views" | "capture-risk";
+
+export type CaptureReadinessReasonCode =
+  | "insufficient-frames"
+  | "missing-images"
+  | "unsynchronized-images"
+  | "soft-accepted-images"
+  | "missing-azimuth"
+  | "missing-elevation"
+  | "visual-check-unavailable"
+  | "visual-disconnected"
+  | "weak-bridge"
+  | "loop-not-closed";
+
+export interface CaptureReadinessIssue {
+  code: CaptureReadinessReasonCode;
+  severity: "repair" | "risk";
+  message: string;
+  action: string;
+  frameRange?: [number, number];
+}
+
+export interface CaptureReadinessReport {
+  format: "open3dcapture-readiness";
+  version: 1;
+  status: CaptureReadinessStatus;
+  primaryAction: string;
+  generatedAt: string;
+  metrics: {
+    acceptedFrames: number;
+    imageFrames: number;
+    synchronizedImageFrames: number;
+    synchronizedImageRatio: number;
+    p10AcceptedSharpness: number;
+    azimuthBinsCovered: number;
+    azimuthBinCount: number;
+    missingAzimuthBins: number[];
+    elevationBandsCovered: Array<"low" | "level" | "high">;
+    elevationSpanDegrees: number;
+    targetEstimate?: [number, number, number];
+    visualConnectedFrames: number;
+    visualComponentCount: number;
+    adjacentEdgeCoverage: number;
+    loopClosureDetected: boolean;
+    physicalLoopClosed: boolean;
+  };
+  issues: CaptureReadinessIssue[];
+}
+
+export interface CaptureReadinessSummary {
+  status: CaptureReadinessStatus;
+  primaryAction: string;
+  issueCodes: CaptureReadinessReasonCode[];
+}
+
 export interface CaptureMetadata {
   format: "open3dcapture";
   version: 1;
@@ -118,6 +173,7 @@ export interface CaptureMetadata {
     builtAt: string;
   };
   cameraResolution?: { width: number; height: number };
+  readiness?: CaptureReadinessSummary;
 }
 
 export interface CaptureDataset {
@@ -130,6 +186,7 @@ export interface CaptureDataset {
   candidatePreviews?: Map<string, Blob>;
   refinement?: DatasetRefinement;
   visualTracking?: VisualTrackingReport;
+  readiness?: CaptureReadinessReport;
 }
 
 export interface DatasetRefinement {
@@ -154,6 +211,19 @@ export interface VisualTrackingEdge {
   medianResidualPixels: number;
   p90ResidualPixels: number;
   accepted: boolean;
+}
+
+export interface VisualPoseConstraint {
+  frameA: number;
+  frameB: number;
+  kind: "adjacent" | "recovery" | "loop";
+  matches: Array<{
+    pointA: [number, number];
+    pointB: [number, number];
+    /** Stable within a frame; used to join pair matches into multi-view tracks. */
+    featureA?: string;
+    featureB?: string;
+  }>;
 }
 
 export interface VisualTrackingReport {
@@ -194,6 +264,8 @@ export interface VisualTrackingReport {
     deferredRepairAttempts?: number;
     deferredMaximumRepairAttempts?: number;
   };
+  /** Added only to the final report so live worker updates stay small. */
+  poseConstraints?: VisualPoseConstraint[];
   edges: VisualTrackingEdge[];
 }
 

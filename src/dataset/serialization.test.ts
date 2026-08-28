@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CaptureDataset, CaptureFrame } from "../shared/types";
-import { buildDatasetFiles, buildNerfstudioTransforms, serializeDecisionsJsonl } from "./serialization";
+import {
+  buildDatasetFiles,
+  buildExportFiles,
+  buildNerfstudioTransforms,
+  serializeDecisionsJsonl,
+} from "./serialization";
 
 const frame: CaptureFrame = {
   id: 0,
@@ -288,5 +293,68 @@ describe("Nerfstudio serialization", () => {
     expect(files.map((file) => file.path)).toContain("refinement/tracking.json");
     const transforms = JSON.parse(files.find((file) => file.path === "transforms.json")!.data as string);
     expect(transforms.frames[0].transform_matrix).toEqual(frame.cameraToWorld);
+  });
+
+  it("builds destination packages that force downstream SfM and preserve WebXR provenance", () => {
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-handoff",
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-08-28T00:00:00.000Z",
+        captureMode: "object",
+        source: "webxr",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames: [frame],
+      decisions: [],
+      imu: [],
+      images: new Map([[frame.imagePath!, new Blob(["jpg"])]]),
+      depths: new Map(),
+      readiness: {
+        format: "open3dcapture-readiness",
+        version: 1,
+        status: "add-views",
+        primaryAction: "Add more views.",
+        generatedAt: "2026-08-28T00:00:00.000Z",
+        metrics: {
+          acceptedFrames: 1,
+          imageFrames: 1,
+          synchronizedImageFrames: 1,
+          synchronizedImageRatio: 1,
+          p10AcceptedSharpness: 1,
+          azimuthBinsCovered: 1,
+          azimuthBinCount: 12,
+          missingAzimuthBins: [1, 2],
+          elevationBandsCovered: [],
+          elevationSpanDegrees: 0,
+          visualConnectedFrames: 0,
+          visualComponentCount: 0,
+          adjacentEdgeCoverage: 0,
+          loopClosureDetected: false,
+          physicalLoopClosed: false,
+        },
+        issues: [],
+      },
+    };
+
+    for (const profile of ["spirula", "lichtfeld"] as const) {
+      const files = buildExportFiles(dataset, profile);
+      const paths = files.map((file) => file.path);
+      expect(paths).toContain("images/000000.jpg");
+      expect(paths).toContain("open3dcapture/telemetry/frames.jsonl");
+      expect(paths).toContain("open3dcapture/preflight/readiness.json");
+      expect(paths).not.toContain("transforms.json");
+      expect(paths.some((path) => path.startsWith("sparse/") || path.startsWith("colmap/"))).toBe(false);
+      const manifest = JSON.parse(
+        files.find((file) => file.path === "open3dcapture/export.json")!.data as string,
+      );
+      expect(manifest).toMatchObject({ profile, finalPoseAuthority: "downstream-sfm" });
+    }
   });
 });

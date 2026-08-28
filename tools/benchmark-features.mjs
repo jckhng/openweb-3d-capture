@@ -19,13 +19,17 @@ const arguments_ = process.argv.slice(2);
 const outputIndex = arguments_.indexOf("--output");
 const outputPath = outputIndex >= 0 ? path.resolve(arguments_[outputIndex + 1]) : undefined;
 if (outputIndex >= 0) arguments_.splice(outputIndex, 2);
+const includeConstraintsIndex = arguments_.indexOf("--include-constraints");
+const includeConstraints = includeConstraintsIndex >= 0;
+if (includeConstraintsIndex >= 0) arguments_.splice(includeConstraintsIndex, 1);
+const multiViewTrackOffsets = [1, 2, 4];
 const deferredDimension = integerOption(arguments_, "--deferred-dimension", 720);
 const captureDimension = integerOption(arguments_, "--capture-dimension", 480);
 const deferredFeatures = integerOption(arguments_, "--deferred-features", 600);
 const gradientRatio = numberOption(arguments_, "--gradient-ratio", 0.84);
 const captureDirectory = arguments_[0] ? path.resolve(arguments_[0]) : undefined;
 if (!captureDirectory) {
-  console.error("Usage: npm run benchmark:features -- <capture-directory> [--capture-dimension 480] [--deferred-dimension 720] [--output report.json]");
+  console.error("Usage: npm run benchmark:features -- <capture-directory> [--capture-dimension 480] [--deferred-dimension 720] [--include-constraints] [--output report.json]");
   process.exit(2);
 }
 
@@ -96,6 +100,8 @@ const scorePair = ([indexA, indexB, kind, matcher = "brief"]) => {
       matcher === "gradient" ? decoded[indexB] : captureDecoded[indexB],
       frames[indexB],
     ),
+    featureA: canonicalFeatureId(indexA, matcher, match.featureA),
+    featureB: canonicalFeatureId(indexB, matcher, match.featureB),
   }));
   const verification = verifyFeatureGeometry(pointMatches, frames[indexA].width, frames[indexA].height);
   const inlierMatches = verification.inlierIndices.map((index) => pointMatches[index]);
@@ -193,6 +199,17 @@ if (visualTracking.readyForCalibration) {
       .map((pair) => pair.calibrationObservation),
   );
 }
+const multiViewConstraintPairs = includeConstraints ? buildMultiViewConstraintPairs() : [];
+const poseConstraints = includeConstraints
+  ? multiViewConstraintPairs
+    .filter((pair) => pair.geometry.accepted)
+    .map((pair) => ({
+      frameA: pair.frameA,
+      frameB: pair.frameB,
+      kind: pair.kind,
+      matches: pair.calibrationObservation.matches,
+    }))
+  : undefined;
 for (const pair of pairReports) delete pair.calibrationObservation;
 const completed = performance.now();
 const report = {
@@ -208,6 +225,8 @@ const report = {
     descriptor: "capture: single-scale oriented BRIEF-256; stop-time: multi-scale gradient-128",
     matcher: `capture-phase mutual Hamming 0.8; deferred unique gradient L2 ${gradientRatio.toFixed(2)} for repair/loops`,
     minimumUsableMatches: 12,
+    multiViewTrackOffsets: includeConstraints ? multiViewTrackOffsets : undefined,
+    multiViewConstraintPairs: includeConstraints ? multiViewConstraintPairs.length : undefined,
   },
   frames: frames.length,
   meanFeatures: mean(briefFeatures.map((value) => value.length)),
@@ -228,11 +247,49 @@ const report = {
   rawMedianPairResidualPixels: median(adjacentUsable.map((pair) => pair.raw.medianPixels)),
   refinedMedianPairResidualPixels: median(adjacentUsable.map((pair) => pair.refined?.medianPixels).filter(Number.isFinite)),
   visualTracking,
+  poseConstraints,
   pairReports,
 };
 const serialized = `${JSON.stringify(report, null, 2)}\n`;
 if (outputPath) atomicWrite(outputPath, serialized);
-process.stdout.write(serialized);
+process.stdout.write(outputPath ? `${JSON.stringify({
+  outputPath,
+  frames: report.frames,
+  pairs: report.pairs,
+  poseConstraints: report.poseConstraints?.length ?? 0,
+  strongFeatureFrames: report.strongFeatureFrames,
+  timingsMilliseconds: report.timingsMilliseconds,
+  visualTracking: {
+    frameCount: report.visualTracking.frameCount,
+    connectedFrameCount: report.visualTracking.connectedFrameCount,
+    componentCount: report.visualTracking.componentCount,
+    loopClosures: report.visualTracking.loopClosures,
+    calibrationEstimate: report.visualTracking.calibrationEstimate,
+  },
+}, null, 2)}\n` : serialized);
+
+function canonicalFeatureId(frameIndex, matcher, featureIndex) {
+  if (matcher === "brief") return `brief:${featureIndex}`;
+  return `strong:${featureIndex}`;
+}
+
+function buildMultiViewConstraintPairs() {
+  const pairs = [];
+  const included = new Set();
+  for (const offset of multiViewTrackOffsets) {
+    for (let index = 0; index < frames.length - offset; index += 1) {
+      const pair = scorePair([index, index + offset, offset === 1 ? "adjacent" : "recovery", "gradient"]);
+      pairs.push(pair);
+      included.add(pairKey(pair.frameA, pair.frameB));
+    }
+  }
+  for (const pair of pairReports) {
+    if (pair.matcher !== "gradient" || included.has(pairKey(pair.frameA, pair.frameB))) continue;
+    pairs.push(pair);
+    included.add(pairKey(pair.frameA, pair.frameB));
+  }
+  return pairs;
+}
 
 function loopPairs(values) {
   const maximumDistance = overlapDistanceLimit(values);

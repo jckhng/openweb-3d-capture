@@ -3,6 +3,7 @@ import type {
   CaptureDecision,
   CaptureFrame,
   CaptureMetadata,
+  CaptureReadinessReport,
   IMUSample,
   VisualTrackingReport,
 } from "../shared/types";
@@ -51,6 +52,10 @@ export class MemoryCaptureStore implements CapturePersistence {
     this.require(captureId).visualTracking = structuredClone(report);
   }
 
+  async saveCaptureReadiness(captureId: string, report: CaptureReadinessReport): Promise<void> {
+    this.require(captureId).readiness = structuredClone(report);
+  }
+
   async finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void> {
     const dataset = this.require(captureId);
     dataset.capture = { ...metadata };
@@ -67,6 +72,7 @@ export class MemoryCaptureStore implements CapturePersistence {
       depths: new Map(dataset.depths),
       candidatePreviews: new Map(dataset.candidatePreviews),
       visualTracking: dataset.visualTracking ? structuredClone(dataset.visualTracking) : undefined,
+      readiness: dataset.readiness ? structuredClone(dataset.readiness) : undefined,
     };
   }
 

@@ -8,6 +8,8 @@ import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
 import { isOpfsSupported } from "../storage/storage";
 import { BUILD_TIMESTAMP, formatBuildTimestamp } from "../shared/build";
+import type { CaptureReadinessReport } from "../shared/types";
+import type { ExportProfile } from "../dataset/zip";
 
 const MINIMUM_TARGET_DISTANCE_CM = Math.round(
   DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
@@ -68,10 +70,10 @@ export function App() {
     setError(caught instanceof Error ? caught.message : String(caught));
   }
 
-  async function downloadCapture(captureId?: string) {
+  async function downloadCapture(profile: ExportProfile, captureId?: string) {
     const exported = captureId
-      ? await controller.exportCapture(captureId)
-      : await controller.exportLastCapture();
+      ? await controller.exportCapture(captureId, profile)
+      : await controller.exportLastCapture(profile);
     const url = URL.createObjectURL(exported.blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -83,12 +85,12 @@ export function App() {
   return (
     <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
-        <p className="eyebrow">M2 quality recorder</p>
+        <p className="eyebrow">Capture preflight</p>
         <h1>Open Web 3D Capture</h1>
         <p className="header-build-id">
           Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
         </p>
-        <p className="lede">Record a durable, reconstruction-ready WebXR image and pose sequence.</p>
+        <p className="lede">Capture validated images for reconstruction in Spirula or LichtFeld.</p>
       </header>
 
       {error || snapshot.lastError ? (
@@ -122,6 +124,9 @@ export function App() {
             </strong>
           </div>
         </div>
+        {snapshot.captureId && snapshot.captureReadiness ? (
+          <CoverageStrip report={snapshot.captureReadiness} />
+        ) : null}
         <p className={`capture-instruction ${qualityClass(snapshot.captureQuality.lastDecision)}`}>
           {captureInstruction(snapshot)}
         </p>
@@ -154,12 +159,26 @@ export function App() {
             </button>
           ) : null}
           {!snapshot.captureId && snapshot.lastCaptureId ? (
-            <button
-              disabled={Boolean(busy)}
-              onClick={() => void run("exporting ZIP", () => downloadCapture())}
-            >
-              Export latest
-            </button>
+            <>
+              <button
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting canonical archive", () => downloadCapture("canonical"))}
+              >
+                Archive ZIP
+              </button>
+              <button
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula"))}
+              >
+                Spirula ZIP
+              </button>
+              <button
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld"))}
+              >
+                LichtFeld ZIP
+              </button>
+            </>
           ) : null}
           {snapshot.running ? (
             <button
@@ -195,6 +214,10 @@ export function App() {
             ? `${busy} — ${formatVisualProcessing(snapshot.visualTracking)}`
             : busy}
         </p>
+      ) : null}
+
+      {!snapshot.captureId && snapshot.lastReadiness ? (
+        <ReadinessPanel report={snapshot.lastReadiness} />
       ) : null}
 
       <section className="debug-section">
@@ -334,14 +357,29 @@ export function App() {
                   <span>
                     {capture.frameCount} frames · {capture.captureMode} · {capture.status} · {capture.createdAt}
                     {capture.applicationBuild ? ` · build ${formatBuildTimestamp(capture.applicationBuild.builtAt)}` : " · legacy build"}
+                    {capture.readiness ? ` · ${readinessLabel(capture.readiness.status)}` : " · preflight unavailable"}
                   </span>
                 </div>
-                <button
-                  disabled={Boolean(busy)}
-                  onClick={() => void run("exporting ZIP", () => downloadCapture(capture.captureId))}
-                >
-                  Export
-                </button>
+                <div className="capture-export-actions">
+                  <button
+                    disabled={Boolean(busy)}
+                    onClick={() => void run("exporting canonical archive", () => downloadCapture("canonical", capture.captureId))}
+                  >
+                    Archive
+                  </button>
+                  <button
+                    disabled={Boolean(busy)}
+                    onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula", capture.captureId))}
+                  >
+                    Spirula
+                  </button>
+                  <button
+                    disabled={Boolean(busy)}
+                    onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld", capture.captureId))}
+                  >
+                    LichtFeld
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -374,6 +412,59 @@ function CapabilityGrid({ report }: { report?: CapabilityReport }) {
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return <div><dt>{label}</dt><dd>{value}</dd></div>;
+}
+
+function ReadinessPanel({ report }: { report: CaptureReadinessReport }) {
+  return (
+    <section className={`readiness-panel readiness-${report.status}`} aria-labelledby="readiness-title">
+      <div className="section-heading">
+        <h2 id="readiness-title">Capture readiness</h2>
+        <strong>{readinessLabel(report.status)}</strong>
+      </div>
+      <p>{report.primaryAction}</p>
+      <dl className="readiness-metrics">
+        <Metric label="images" value={report.metrics.imageFrames} />
+        <Metric
+          label="orbit sectors"
+          value={`${report.metrics.azimuthBinsCovered} / ${report.metrics.azimuthBinCount}`}
+        />
+        <Metric
+          label="elevation span"
+          value={`${report.metrics.elevationSpanDegrees.toFixed(1)}°`}
+        />
+        <Metric
+          label="visual graph"
+          value={`${report.metrics.visualConnectedFrames} / ${report.metrics.imageFrames}`}
+        />
+      </dl>
+      {report.issues.length ? (
+        <ul className="readiness-issues">
+          {report.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function CoverageStrip({ report }: { report: CaptureReadinessReport }) {
+  const missing = new Set(report.metrics.missingAzimuthBins);
+  return (
+    <div className="coverage-strip" aria-label={`${report.metrics.azimuthBinsCovered} of ${report.metrics.azimuthBinCount} orbit sectors covered`}>
+      <span>orbit</span>
+      <div>
+        {Array.from({ length: report.metrics.azimuthBinCount }, (_, index) => (
+          <i key={index} className={missing.has(index) ? "" : "covered"} />
+        ))}
+      </div>
+      <strong>{report.metrics.azimuthBinsCovered}/{report.metrics.azimuthBinCount}</strong>
+    </div>
+  );
+}
+
+function readinessLabel(status: CaptureReadinessReport["status"]): string {
+  if (status === "ready") return "READY FOR SFM";
+  if (status === "add-views") return "ADD VIEWS";
+  return "CAPTURE RISK";
 }
 
 function MatrixPanel({ title, matrix }: { title: string; matrix?: Matrix4 }) {
@@ -428,8 +519,15 @@ function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision
 }
 
 function captureInstruction(snapshot: DiagnosticSnapshot) {
-  if (!snapshot.running) return "Start XR on the Android phone before recording.";
+  if (!snapshot.running) {
+    return snapshot.lastReadiness
+      ? `${readinessLabel(snapshot.lastReadiness.status)} — ${snapshot.lastReadiness.primaryAction}`
+      : "Start XR on the Android phone before recording.";
+  }
   if (!snapshot.captureId) {
+    if (snapshot.lastReadiness) {
+      return `${readinessLabel(snapshot.lastReadiness.status)} — ${snapshot.lastReadiness.primaryAction}`;
+    }
     if (
       snapshot.targetDistance !== undefined &&
       snapshot.targetDistance < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance
@@ -438,7 +536,7 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
   }
   switch (snapshot.captureQuality.lastDecision) {
     case "accepted":
-      return "GOOD — continue around the object. Stop after 50–100 accepted frames.";
+      return liveReadinessInstruction(snapshot.captureReadiness);
     case "blur":
       return "HOLD STEADY OR MOVE FARTHER — the target is not sharp enough.";
     case "low-texture":
@@ -457,6 +555,18 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
     default:
       return "Hold steady while the first frame is evaluated.";
   }
+}
+
+function liveReadinessInstruction(report?: CaptureReadinessReport): string {
+  if (!report) return "GOOD — continue around the object.";
+  const frames = report.metrics.imageFrames;
+  if (frames < 12) return "GOOD — continue a level orbit around the object.";
+  const azimuth = report.issues.find((issue) => issue.code === "missing-azimuth");
+  if (frames >= 24 && azimuth) return azimuth.action;
+  const elevation = report.issues.find((issue) => issue.code === "missing-elevation");
+  if (frames >= 36 && elevation) return elevation.action;
+  if (frames < 50) return `GOOD — add ${50 - frames} more distinct views.`;
+  return report.primaryAction;
 }
 
 function humanize(value: string) {

@@ -52,6 +52,11 @@ section {
 .capture-status > div { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.55rem; background: rgb(7 12 20 / 72%); }
 .capture-status span { color: #94a3b8; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .capture-status strong { font-size: clamp(1.15rem, 5vw, 2rem); }
+.coverage-strip { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.6rem; margin-top: 0.65rem; color: #94a3b8; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.coverage-strip > div { display: grid; grid-template-columns: repeat(12, 1fr); gap: 0.2rem; }
+.coverage-strip i { height: 0.35rem; border-radius: 999px; background: #334155; }
+.coverage-strip i.covered { background: #4ade80; box-shadow: 0 0 0.45rem rgb(74 222 128 / 35%); }
+.coverage-strip strong { color: #cbd5e1; }
 .capture-instruction { min-height: 2.8rem; color: #e0f2fe; line-height: 1.45; }
 details { margin-top: 1rem; border-top: 1px solid #334155; padding-top: 0.8rem; }
 summary { color: #94a3b8; cursor: pointer; }
@@ -72,7 +77,8 @@ main.xr-active {
 
 main.xr-active header,
 main.xr-active .debug-section,
-main.xr-active .diagnostic-controls { display: none; }
+main.xr-active .diagnostic-controls,
+main.xr-active .readiness-panel { display: none; }
 
 main.xr-active .reticle {
   position: fixed;
@@ -151,6 +157,15 @@ main.xr-active .busy {
 .busy { margin: 0.75rem 0 0; }
 .error { border-left: 3px solid #fb7185; padding: 0.85rem 1rem; background: #3f1727; color: #fecdd3; }
 
+.readiness-panel { border-left: 4px solid #38bdf8; }
+.readiness-panel.readiness-ready { border-left-color: #4ade80; }
+.readiness-panel.readiness-add-views { border-left-color: #fbbf24; }
+.readiness-panel.readiness-capture-risk { border-left-color: #fb7185; }
+.readiness-panel p { line-height: 1.5; }
+.readiness-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: 0.55rem; margin: 0; }
+.readiness-metrics > div { padding: 0.65rem; border: 1px solid #26344a; border-radius: 0.55rem; background: #0b1220; }
+.readiness-issues { margin: 0.8rem 0 0; padding-left: 1.25rem; color: #cbd5e1; line-height: 1.5; }
+
 .capabilities, .telemetry { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.65rem; margin: 0; }
 .capabilities > div, .telemetry > div { padding: 0.75rem; border: 1px solid #26344a; border-radius: 0.55rem; background: #0b1220; }
 dt { color: #94a3b8; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -170,6 +185,8 @@ code { display: block; overflow-x: auto; white-space: pre; color: #bae6fd; font-
 .capture-list li div { display: grid; gap: 0.25rem; min-width: 0; }
 .capture-list strong, .capture-list span { overflow-wrap: anywhere; }
 .capture-list span { color: #94a3b8; font-size: 0.82rem; }
+.capture-export-actions { display: flex !important; flex: 0 0 auto; flex-wrap: wrap; gap: 0.4rem !important; }
+.capture-export-actions button { padding: 0.55rem 0.65rem; }
 
 @media (max-width: 520px) {
   main { padding-top: 1.25rem; }

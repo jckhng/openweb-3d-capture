@@ -2,7 +2,13 @@
 
 ## 0. Implementation status — 28 August 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression is fixed on the target phone. A higher-resolution deferred repair pass now connects the latest difficult capture in replay. Phone validation of that repair and bounded SE(3) correction remain the required bridge to M3.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression and deferred repair are validated on the target phone. Pairwise SE(3) correction is rejected. A bounded multi-view landmark prototype improves one reference capture and regresses another despite passing its internal score. On-phone pose refinement is therefore removed from the production critical path. M3 capture preflight, coverage guidance, and destination-specific Spirula/LichtFeld handoff are now the active product milestones.
+
+Production decision:
+
+> Open Web 3D Capture is a capture compiler and preflight system, not a mobile SfM replacement. The phone prevents irreversible capture defects and emits a validated, provenance-preserving package. Spirula Studio or LichtFeld Studio performs final visual registration before training.
+
+The existing pose optimizers remain diagnostic negative controls. They must not produce a direct-train export or block capture-guidance work.
 
 Implemented:
 
@@ -52,12 +58,24 @@ Implemented:
 * texture-aware 3×3 target-region sharpness analysis with separate low-texture guidance
 * bounded scene-adaptive sharpness threshold with a 0.38 absolute floor
 * sampled 128×128 rejected-candidate crops for auditable quality calibration without per-rejection write pressure
+* desktop PyCOLMAP reference reconstruction runner with shared OPENCV calibration
+* diagnostic bounded SE(3) replay with immutable raw poses, explicit correction limits, held-out pairwise scoring, and continuity priors
+* independent raw/candidate/COLMAP pose comparison gate that prevents the diagnostic correction from being exported as refined
+* stable final-only feature identities, multi-view track joining, WebXR-initialized ray triangulation, robust landmark reprojection scoring, and bounded alternating pose/retriangulation replay
+* independent similarity-gauge alignment for fair raw/candidate/COLMAP trajectory comparison
+* hard per-pose and adjacent-correction bounds with raw-pose immutability and diagnostic-only output
+* destination-independent capture-readiness report with explicit repair/risk reason codes
+* object-centered twelve-sector azimuth coverage and low/level/high elevation analysis
+* visual disconnection, weak adjacent bridge, and physical/visual loop-return checks
+* minimal live orbit strip and post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
+* separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
+* destination packages that retain WebXR provenance without root pose/reconstruction markers
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (53 tests)
+npm test        PASS (62 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -104,6 +122,18 @@ Hardware and reconstruction evidence:
 * a 51-frame bicycle capture validates 0.266-second candidate cadence, 63 ms mean/125.5 ms maximum capture-worker time, and 51/51 live visual connectivity
 * that capture rejects 110/178 candidates as blur in three long viewpoint-dependent runs despite lower rejected-frame motion and visually usable accepted images, proving the single absolute Laplacian threshold confounds texture with focus
 * the bicycle capture finishes 2.18 m from its starting camera and has no loop closure; final low-score runs starved the intended coverage rather than exposing a graph-repair failure
+* the 142-frame build-identified validation capture preserves a 0.267-second median candidate interval, accepts 142/169 candidates, and connects all 142 frames in one phone-generated visual component
+* independent PyCOLMAP 4.1.1 reconstruction registers 142/142 frames with 284,740 sparse points and 0.354-pixel mean reprojection error
+* aligned COLMAP poses differ from WebXR by only 1.16 cm median/3.62 cm maximum translation and 0.77-degree median/1.25-degree maximum rotation, confirming WebXR remains a strong metric prior
+* COLMAP refinement reduces the low-resolution median pair residual from 0.796 to 0.643 pixels and passes the desktop direct-train gate
+* the bounded pairwise SE(3) prototype reduces its held-out loop residual from 7.13 to 2.66 pixels while staying within 4 cm and 1.31 degrees, but this apparent success is false: only 2/142 corrected poses move closer to COLMAP
+* candidate-to-COLMAP error regresses from 1.15 to 1.35 cm median translation and from 0.76 to 0.80 degrees median rotation; pairwise epipolar scoring is therefore rejected as the final phone objective
+* unified strong matching at temporal offsets 1/2/4 produces 403 accepted constraints, 1,500 selected tracks, 1,367 stable landmarks, 6,041 training observations, and 1,367 held-out observations on the 142-frame capture
+* the bounded multi-view replay takes approximately 0.40 seconds after matching and reduces held-out median/p90 landmark residual from 2.58/6.55 to 2.34/5.69 pixels
+* after independent similarity alignment, the same candidate improves 142-frame median translation from 1.16 to 1.08 cm and median rotation from 0.76 to 0.70 degrees; p90 also improves, but maximum translation error regresses and only 39% of frames improve in both measures
+* the same fixed configuration produces 1,186 landmarks on the independent 145-frame dataset and improves held-out landmark residual, yet median COLMAP disagreement regresses from 1.79 to 1.80 cm and from 1.34 to 1.36 degrees
+* known COLMAP calibration does not remove the 142-frame translation outliers; track geometry and the alternating optimizer remain the primary limitations
+* unified deferred matching costs approximately 61–70 seconds on the development desktop versus less than 0.5 seconds for track joining, triangulation, and pose replay; the current matcher is not phone-ready
 
 M2 calibration findings:
 
@@ -146,10 +176,10 @@ Plan constraints clarified by implementation:
 * API-surface detection is not proof of a granted WebXR feature; the live session is authoritative.
 * `getUserMedia()` frames are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. They remain a diagnostic fallback and are marked as unsynchronized in telemetry.
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
-* Do not begin M3 coverage guidance until M2 thresholds have been exercised on the target phone.
-* M5 seed generation was pulled forward only to unblock Spirula interoperability at Gate 2; M3 remains blocked on M2 calibration.
-* WebXR poses are metric priors, not reconstruction-grade final poses. Direct-train readiness requires visual residual validation and, where necessary, refinement.
-* Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must preserve this fallback path.
+* M3 coverage guidance is now unblocked. Continue calibrating M2 quality thresholds, but do not make universal blur thresholds or phone pose refinement prerequisites for guidance work.
+* M5 seed generation was pulled forward for interoperability experiments. It does not replace downstream SfM or block M3.
+* WebXR poses are metric navigation priors, not reconstruction-grade final poses. Production training uses downstream visual SfM.
+* Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must make both paths explicit.
 * The deferred phase split restores sub-second candidate cadence on the target phone. Do not start SE(3) work until the higher-resolution deferred repair is deployed and confirms a connected graph without capture regression or false loops.
 * Registration percentage and reprojection error alone can produce a false-positive readiness result when features lie mainly on the background. Add minimum sampling, target-region feature support, and coverage gates before trusting desktop or phone `directTrainReady` for object capture.
 * The current approach is fail-safe but not yet universally reconstruction-robust: it preserves raw data, gates unverified refinement, and falls back to downstream SfM, but fixed-focus WebXR imposes an unrecoverable optical-quality limit for small or close subjects.
@@ -165,11 +195,11 @@ Its job is to:
 
 1. access camera + WebXR tracking data,
 2. select useful reconstruction keyframes,
-3. visually validate and refine the camera model and poses where device resources permit,
+3. validate image quality, overlap, connectivity, and capture completeness while the user can still correct them,
 4. guide the user toward missing viewpoints and weak visual connections,
 5. retain useful camera/depth/IMU telemetry,
 6. save everything locally on-device,
-7. export a standard dataset that can be processed by:
+7. export a canonical capture archive plus explicit downstream packages for:
 
    * Brush
    * Spirula Studio
@@ -179,7 +209,7 @@ Its job is to:
 
 Core philosophy:
 
-> Capture once. Keep the raw data. Reconstruct anywhere.
+> Capture once. Detect omissions before leaving. Keep the raw data. Reconstruct anywhere.
 
 ---
 
@@ -206,7 +236,7 @@ Do not attempt as production v1 scope:
 
 during v1.
 
-A bounded native Android camera feasibility spike is permitted after the current phone refinement validation. It is an architecture experiment, not a v1 frontend commitment, and must export the same open dataset schema as the web recorder.
+A bounded native Android camera feasibility spike is permitted after the destination adapters and capture-preflight workflow are validated. It addresses the fixed-focus operating envelope, not phone SfM, and must export the same open dataset schema as the web recorder.
 
 Feature detection must be used everywhere so unsupported capabilities degrade cleanly.
 
@@ -241,15 +271,24 @@ App:
    ↓
 Capture complete
    ↓
+Preflight checks:
+  - image quality
+  - target coverage
+  - overlap/connectivity
+  - closure/bridge views
+   ↓
+READY | ADD SPECIFIC VIEWS | CAPTURE RISK
+   ↓
 Dataset remains stored locally
    ↓
-EXPORT
+Choose destination:
+  SPIRULA | LICHTFELD | CANONICAL ARCHIVE
    ↓
-capture.zip
+destination-safe package
    ↓
 PC
    ↓
-Brush / Spirula / LichtFeld
+downstream SfM in Spirula or LichtFeld
    ↓
 Gaussian splat
    ↓
@@ -706,7 +745,7 @@ WebXR poses remain useful even when replaced in the final transform file because
 * regularize phone pose corrections and reject physically implausible solutions
 * provide an immediate raw-pose export when visual refinement cannot run
 
-Never overwrite this information. Preserve raw WebXR, visually refined, and downstream-SfM poses independently with explicit provenance and readiness selection.
+Never overwrite this information. Preserve raw WebXR, experimental refined, and downstream-SfM poses independently with explicit provenance. Production exports must treat downstream SfM as the final pose authority.
 
 ## Capture-path spectrum
 
@@ -720,7 +759,7 @@ Properties:
 * best browser-accessible pose/image synchronization
 * live depth, motion, and coverage guidance where available
 * fixed-focus optical floor on the current platform
-* visual validation/refinement required before direct-train readiness
+* downstream visual SfM required before training
 
 ### Autofocus photo/SfM fallback — candidate web mode
 
@@ -730,8 +769,8 @@ Properties:
 
 * preserves the zero-install path for small or close subjects
 * exports photos explicitly as unposed or approximately guided
-* routes to Spirula native SfM, LichtFeld COLMAP, or project desktop refinement
-* gives up immediate direct-train output unless independent visual SfM succeeds
+* routes to Spirula native SfM or LichtFeld COLMAP
+* exports unposed reconstruction images rather than pretending asynchronous photos inherit WebXR poses
 
 This is preferable to attaching stale or guessed WebXR transforms to autofocus images.
 
@@ -805,7 +844,7 @@ Decision rules:
 * if autofocus photographs are materially sharper but cannot be synchronized robustly in-browser, use web photo/SfM as the fallback and pursue native Precision Capture
 * if ARCore `AUTO` alone supplies stable sharp synchronized frames, prefer the simpler native path over Shared Camera complexity
 * use Shared Camera only when its added resolution, metadata, or focus control materially improves reconstruction on supported devices
-* retain downstream SfM regardless; no capture frontend may label a dataset direct-train ready without the same visual readiness gates
+* retain downstream SfM regardless; no capture frontend may label its supplied WebXR or experimental poses direct-train ready
 
 This creates progressive product tiers rather than forcing one mechanism to cover incompatible operating ranges:
 
@@ -878,64 +917,66 @@ Log every component.
 
 ---
 
-# 14A. Reconstruction-readiness validation and pose refinement
+# 14A. Capture preflight and downstream reconstruction
 
-WebXR pose, depth, and IMU are priors. A dataset is direct-train ready only when its images agree with its camera model to a measured tolerance.
+WebXR pose, depth, and IMU are capture-time navigation priors. They organize images, estimate coverage, identify likely overlap, detect tracking discontinuities, and preserve metric context. They are not production training poses.
 
-Progressive pipeline:
+Production pipeline:
 
 ```text
 accepted WebXR keyframe
     ↓
 low-resolution feature extraction in a worker
     ↓
-match local neighbors chosen from WebXR overlap
+quality, target-support, and likely-overlap checks
     ↓
-estimate shared intrinsics/distortion and small SE(3) pose corrections
+coverage graph and weak-bridge detection
     ↓
-loop closure near previously visited viewpoints
+specific capture repair instruction while on site
     ↓
-final bundle adjustment
+canonical archive + destination adapter
     ↓
-readiness report
+final SfM in Spirula or LichtFeld
 ```
 
-Phone implementation constraints:
+Phone preflight constraints:
 
-* process accepted keyframes incrementally instead of rerunning full SfM after capture
-* use WebXR poses to restrict pair selection and regularize corrections
-* use depth and IMU to preserve metric scale and reject implausible corrections
+* process accepted keyframes incrementally without attempting production bundle adjustment
+* use WebXR poses to restrict likely-overlap checks and maintain a live coverage model
+* distinguish optical blur, low texture, excessive motion, redundancy, missing coverage, and weak graph bridges
 * run feature work outside the UI/XR thread
-* retain raw images, WebXR poses, refined poses, and residuals independently
-* fail safely to an unrefined export when resources or visual connectivity are insufficient
+* show one actionable instruction at a time; keep diagnostics out of the primary viewfinder
+* retain raw images, WebXR poses, experimental poses, quality evidence, and coverage evidence independently
+* always allow canonical raw export; label risk instead of presenting phone poses as reconstruction-ready
 
 Readiness report should include:
 
 ```text
-registered frame percentage
-median and p90 reprojection residual
-connected pose-graph coverage
-loop-closure status
-intrinsics/distortion estimate
-maximum pose correction
-DIRECT-TRAIN READY | NEEDS DESKTOP REFINEMENT
+accepted image count and quality distribution
+target-region feature support
+azimuth and elevation coverage
+likely-overlap graph connectivity
+weak bridges and tracking discontinuities
+loop-return status
+READY FOR DOWNSTREAM SFM | ADD SPECIFIC VIEWS | CAPTURE RISK
 ```
 
-Desktop fallback paths:
+Production reconstruction paths:
 
 * Spirula Studio native raw-photo/video SfM
 * LichtFeld Studio COLMAP Reconstruction plugin
-* project `npm run refine -- <capture-directory>` compatibility tool
+* project desktop tools for validation and regression analysis only
 
-Acceptance for the first phone prototype:
+Destination-adapter rules:
 
-* all 105 rigid seesaw frames connect or rejected frames are explicitly reported
-* median visual residual below 1.5 pixels
-* bounded memory without retaining decoded full-resolution images
-* final optimization completes within 60 seconds on the target phone
-* refined seesaw reconstruction materially reduces duplicate surfaces against the original WebXR export
+* retain one canonical archive as the source of truth
+* emit a Spirula photo-input package that cannot be mistaken for an already reconstructed `transforms.json`, `sparse/`, or `colmap/` dataset
+* emit a LichtFeld image-input package for its COLMAP Reconstruction plugin without presenting WebXR poses as COLMAP output
+* preserve WebXR poses under telemetry/provenance paths in both workflows
+* provide destination-specific instructions and record the selected adapter in the export manifest
+* do not duplicate image bytes inside the canonical archive merely to create adapter aliases
 
-Offline prototype result:
+Phone-refinement experiment result:
 
 * raw and refined poses are preserved independently and exported through separate standard transform files
 * PyCOLMAP 4.1.1 registers 105/105 seesaw frames with 0.63-pixel median and 1.75-pixel p90 observation residual
@@ -947,16 +988,20 @@ Offline prototype result:
 * independent COLMAP poses reduce the accepted loop-edge residuals from 9.24–56.91 pixels to 0.80–2.01 pixels, validating their use as pose-drift constraints
 * the same hybrid matcher does not fabricate a loop closure on the seesaw sequence
 
-Next refinement bound:
+Experiment conclusion:
 
-1. deploy the 720-pixel deferred-repair build and verify the latest replay gains reproduce on the target phone
-2. confirm candidate cadence remains below 0.5 seconds and record deferred time, 27–35 MB grayscale retention, memory, and thermal behavior from a 100–150-frame orbit
-3. require minimum view sampling, target-region feature support, and object coverage in the readiness gate
-4. implement bounded WebXR-regularized SE(3) corrections using only verified inlier tracks and loop closures
-5. reject the solution unless connectivity is preserved, residuals improve, and translation/rotation corrections remain inside explicit limits
-6. write refined poses separately and retain downstream SfM whenever optimization is unavailable or rejected
+* the phone-generated visual graph is useful for preflight and bridge detection
+* bounded pairwise and multi-view corrections do not generalize sufficiently to become final poses
+* internal reprojection improvement is not a safe proxy for independent trajectory improvement
+* full mobile SfM and bundle adjustment are no longer v1 requirements
+* retain the experiments for regression research; do not expose them in the normal capture or export workflow
 
-Do not begin M3 spherical guidance until this validator can expose weak visual connections. M3 guidance should improve pose-graph conditioning, not only fill geometric view bins.
+Next production bound:
+
+1. validate the new readiness guidance on the target phone and tune only thresholds that produce demonstrated false prompts
+2. run the same capture set through Spirula native SfM and the LichtFeld COLMAP plugin; record registration rate, reconstruction quality, manual steps, and handoff time
+3. add sector-specific repair visualization or representative thumbnails when a text/strip instruction is insufficient to locate a weak bridge
+4. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
 
 ---
 
@@ -1647,30 +1692,32 @@ This is the single most important early gate.
 
 ---
 
-## Gate 1A — direct-train readiness
+## Gate 1A — capture-preflight usefulness
 
-For a rigid, textured target:
+For a rigid, textured target, the phone must identify defects the user can still repair:
 
 ```text
-visual residuals pass threshold
-camera distortion represented
-pose graph connected
-refined reconstruction has no systematic duplicate surfaces
+blur or insufficient target detail
+missing azimuth/elevation regions
+weak overlap bridges
+tracking discontinuities
+failure to close the orbit
 ```
 
-If phone refinement fails this gate, export must clearly request downstream SfM rather than label the dataset direct-train ready.
+The normal workflow must never label WebXR or experimental mobile-refinement poses as direct-train ready. Canonical export remains available when preflight reports risk.
 
 ---
 
 ## Gate 2 — interoperability
 
-The same dataset works with at least two of:
+The same canonical capture can be handed to both production destinations without manual file rearrangement:
 
 ```text
-Brush
-Spirula
-LichtFeld
+Spirula native photo SfM
+LichtFeld COLMAP Reconstruction plugin
 ```
+
+Each destination must reconstruct from images rather than silently accepting WebXR transforms as final poses.
 
 ---
 
@@ -1739,29 +1786,33 @@ Give the agent work in this order:
 
 9. Close-focus and calibrated blur rejection
 
-10. Visual pose validation and readiness report
+10. Object target and spherical coverage model
 
-11. Incremental on-phone pose/intrinsics refinement
+11. Capture-readiness report and reason codes
 
-12. Destination SfM adapters and desktop fallback
+12. Weak-bridge and missing-region repair guidance
 
-13. Controlled web-versus-native focus architecture experiment
+13. Minimal single-instruction capture HUD and post-capture repair flow
 
-14. Object target model
+14. Spirula native-SfM export adapter
 
-15. Pose-graph-aware coverage visualization
+15. LichtFeld COLMAP-plugin export adapter
 
-16. Next-view guidance
+16. Cross-destination reconstruction regression suite
 
-17. Capture library
+17. Controlled web-versus-native focus architecture experiment
 
-18. Depth recording
+18. Capture library
 
-19. PLY seed generation
+19. Depth recording
 
-20. Splat viewer
+20. PLY seed generation
 
-21. Scene Mode
+21. Splat viewer
+
+22. Scene Mode
+
+23. On-phone pose refinement research, only after production gates pass
 ```
 
 Do not let the agent jump ahead to splat rendering because it looks more visually interesting.

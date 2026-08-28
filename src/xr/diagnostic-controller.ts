@@ -1,4 +1,5 @@
-import { exportDatasetZip } from "../dataset/zip";
+import { exportDatasetZip, type ExportProfile } from "../dataset/zip";
+import { analyzeCaptureReadiness, summarizeCaptureReadiness } from "../coverage/readiness";
 import {
   DEFAULT_QUALITY_SELECTOR_CONFIG,
   QualityKeyframeSelector,
@@ -15,6 +16,7 @@ import type {
   CaptureFrame,
   CapabilityReport,
   CaptureMetadata,
+  CaptureReadinessReport,
   Intrinsics,
   Matrix4,
   VisualTrackingReport,
@@ -52,6 +54,8 @@ interface ActiveCapture {
   inFlight: boolean;
   stopping: boolean;
   pendingWrite?: Promise<void>;
+  readinessFrames: CaptureFrame[];
+  readinessDecisions: CaptureDecision[];
 }
 
 interface CandidateFrameInput {
@@ -107,6 +111,8 @@ export interface DiagnosticSnapshot {
   captureProgress: { current: number; target?: number };
   captureQuality: CaptureQualityTelemetry;
   visualTracking: VisualTrackingReport;
+  captureReadiness?: CaptureReadinessReport;
+  lastReadiness?: CaptureReadinessReport;
   lastCaptureId?: string;
   lastImageStatus: string;
   lastError?: string;
@@ -160,6 +166,7 @@ export class XRDiagnosticController {
     this.qualityCanvas.height = 128;
     this.visualTracker = new IncrementalVisualTracker((report) => {
       this.snapshot.visualTracking = report;
+      this.updateLiveReadiness(report);
       this.emit();
     });
   }
@@ -184,6 +191,12 @@ export class XRDiagnosticController {
         ...this.snapshot.visualTracking,
         edges: this.snapshot.visualTracking.edges.map((edge) => ({ ...edge })),
       },
+      captureReadiness: this.snapshot.captureReadiness
+        ? structuredClone(this.snapshot.captureReadiness)
+        : undefined,
+      lastReadiness: this.snapshot.lastReadiness
+        ? structuredClone(this.snapshot.lastReadiness)
+        : undefined,
       pose: this.snapshot.pose?.map((row) => [...row]),
       projectionMatrix: this.snapshot.projectionMatrix ? [...this.snapshot.projectionMatrix] : undefined,
       intrinsics: this.snapshot.intrinsics ? { ...this.snapshot.intrinsics } : undefined,
@@ -320,34 +333,42 @@ export class XRDiagnosticController {
       imuStartIndex: this.imu.getSampleCount(),
       inFlight: false,
       stopping: false,
+      readinessFrames: [],
+      readinessDecisions: [],
     };
     this.snapshot.captureId = metadata.captureId;
     this.snapshot.captureMode = captureMode;
     this.snapshot.captureProgress = { current: 0, target };
     this.snapshot.captureQuality = createQualityTelemetry();
+    this.snapshot.captureReadiness = undefined;
     this.visualTracker.reset();
     this.snapshot.lastError = undefined;
     this.emit();
   }
 
-  async exportLastCapture(): Promise<{ blob: Blob; filename: string }> {
+  async exportLastCapture(profile: ExportProfile = "canonical"): Promise<{ blob: Blob; filename: string }> {
     if (!this.lastCaptureId && !this.activeCapture?.id) {
       throw new Error("No capture is available to export");
     }
     const captureId = this.lastCaptureId ?? this.activeCapture?.id;
     if (!captureId) throw new Error("No capture is available to export");
     const dataset = await this.persistence.loadCapture(captureId);
+    dataset.readiness ??= analyzeCaptureReadiness(dataset);
     return {
-      blob: await exportDatasetZip(dataset),
-      filename: `${captureId}.zip`,
+      blob: await exportDatasetZip(dataset, profile),
+      filename: exportFilename(captureId, profile),
     };
   }
 
-  async exportCapture(captureId: string): Promise<{ blob: Blob; filename: string }> {
+  async exportCapture(
+    captureId: string,
+    profile: ExportProfile = "canonical",
+  ): Promise<{ blob: Blob; filename: string }> {
     const dataset = await this.persistence.loadCapture(captureId);
+    dataset.readiness ??= analyzeCaptureReadiness(dataset);
     return {
-      blob: await exportDatasetZip(dataset),
-      filename: `${captureId}.zip`,
+      blob: await exportDatasetZip(dataset, profile),
+      filename: exportFilename(captureId, profile),
     };
   }
 
@@ -459,6 +480,7 @@ export class XRDiagnosticController {
         ? undefined
         : await canvasToBlob(this.qualityCanvas, "image/jpeg", 0.7) ?? undefined;
       await this.persistence.appendDecision(active.id, decision, rejectedPreview);
+      active.readinessDecisions.push(structuredClone(decision));
       if (!decision.accepted) {
         this.snapshot.lastImageStatus = `candidate rejected: ${decision.reason}`;
         this.emit();
@@ -510,6 +532,7 @@ export class XRDiagnosticController {
     };
 
     await this.persistence.appendFrame(active.id, frame, image?.blob, input.depth?.blob);
+    active.readinessFrames.push(structuredClone(frame));
     if (active.selector && image?.source === "xr-camera") {
       this.visualTracker.track({
         id,
@@ -526,6 +549,7 @@ export class XRDiagnosticController {
     active.metadata.cameraResolution ??= outputWidth > 0
       ? { width: outputWidth, height: outputHeight }
       : undefined;
+    this.updateLiveReadiness(this.snapshot.visualTracking);
     this.snapshot.captureProgress = { current: active.frames, target: active.target };
     this.snapshot.lastImageStatus = image
       ? image.source === "xr-camera"
@@ -773,19 +797,37 @@ export class XRDiagnosticController {
       await this.persistence.saveVisualTracking(active.id, visualTracking);
       this.snapshot.visualTracking = visualTracking;
     }
-    await this.persistence.finalizeCapture(active.id, {
+    const finalizedMetadata: CaptureMetadata = {
       ...active.metadata,
       frameCount: active.frames,
       hasImu: samples.length > 0,
       status,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    await this.persistence.finalizeCapture(active.id, finalizedMetadata);
+    const dataset = await this.persistence.loadCapture(active.id);
+    const readiness = analyzeCaptureReadiness(dataset);
+    await this.persistence.saveCaptureReadiness(active.id, readiness);
+    finalizedMetadata.readiness = summarizeCaptureReadiness(readiness);
+    await this.persistence.finalizeCapture(active.id, finalizedMetadata);
     this.lastCaptureId = active.id;
     this.snapshot.lastCaptureId = active.id;
     this.snapshot.captureId = undefined;
     this.snapshot.captureMode = undefined;
+    this.snapshot.captureReadiness = undefined;
+    this.snapshot.lastReadiness = readiness;
     this.activeCapture = undefined;
     this.emit();
+  }
+
+  private updateLiveReadiness(visualTracking: VisualTrackingReport): void {
+    const active = this.activeCapture;
+    if (!active?.selector) return;
+    this.snapshot.captureReadiness = analyzeCaptureReadiness({
+      frames: active.readinessFrames,
+      decisions: active.readinessDecisions,
+      visualTracking,
+    });
   }
 
   private emit(): void {
@@ -811,6 +853,10 @@ interface CapturedImage {
   source: "xr-camera" | "media-stream";
   sharpnessScore: number;
   textureScore: number;
+}
+
+function exportFilename(captureId: string, profile: ExportProfile): string {
+  return profile === "canonical" ? `${captureId}.zip` : `${captureId}-${profile}.zip`;
 }
 
 function createQualityTelemetry(): CaptureQualityTelemetry {

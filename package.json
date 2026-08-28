@@ -9,7 +9,12 @@
     "preview": "vite preview",
     "pointcloud": "vite-node tools/generate-pointcloud.mjs",
     "analyze:quality": "vite-node tools/analyze-image-quality.mjs",
+    "analyze:readiness": "vite-node tools/analyze-readiness.mjs",
+    "refine:colmap": ".venv-refinement/bin/python tools/run-colmap-reference.py",
     "benchmark:features": "vite-node tools/benchmark-features.mjs",
+    "optimize:poses": "vite-node tools/optimize-poses.mjs",
+    "optimize:landmarks": "vite-node tools/optimize-landmarks.mjs",
+    "compare:poses": "vite-node tools/compare-pose-sets.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

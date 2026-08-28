@@ -1,6 +1,6 @@
 # Open Web 3D Capture
 
-Current scope: Milestone 2 calibration and the reconstruction-readiness bridge to Milestone 3. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, poses, CPU depth, and capture-window IMU data directly to OPFS.
+Current scope: capture preflight, object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, raw WebXR poses, CPU depth, and capture-window IMU data directly to OPFS. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
 
 ## Run locally
 
@@ -39,9 +39,25 @@ M2 test sequence:
 7. Select **Stop and save** after 50–100 accepted frames.
 8. Select **Export latest**.
 9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
-10. Load the dataset into Brush or another Nerfstudio-compatible reconstruction path.
+10. Reconstruct the images through Spirula native SfM or LichtFeld's COLMAP Reconstruction plugin before training. Do not treat the WebXR transform file as final reconstruction poses.
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
+
+After capture, the app reports one of `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`. The report checks image availability and synchronization, accepted-frame sharpness, twelve-sector orbit coverage, elevation diversity, visual connectivity, weak adjacent bridges, and loop return. It is saved as `preflight/readiness.json` in the canonical archive.
+
+Three export buttons are available:
+
+- **Archive ZIP** preserves the complete canonical dataset, including raw WebXR transforms, depth, IMU, diagnostics, and optional seed point cloud.
+- **Spirula ZIP** contains the reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. It intentionally omits root reconstruction markers so native SfM runs.
+- **LichtFeld ZIP** contains the reconstruction images, provenance, readiness report, and instructions for the COLMAP Reconstruction plugin. It intentionally contains no fabricated COLMAP model.
+
+Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority.
+
+Replay the same readiness checks against an existing capture without modifying it:
+
+```bash
+npm run analyze:readiness -- /path/to/capture.zip
+```
 
 ## Add a seed point cloud to an existing capture
 
@@ -64,6 +80,19 @@ The refinement tools use an isolated Python environment. The system COLMAP insta
 ```bash
 python3 -m venv .venv-refinement
 .venv-refinement/bin/pip install -r tools/requirements-refinement.txt
+```
+
+Create an independent COLMAP reference model from an extracted capture:
+
+```bash
+npm run refine:colmap -- /path/to/capture /path/to/colmap-reference
+```
+
+The default sequential matcher uses 15-frame overlap plus quadratic pairing. Use `--matcher exhaustive` when a sequence cannot register completely.
+
+Convert the selected COLMAP model into portable refined outputs:
+
+```bash
 .venv-refinement/bin/python tools/prepare-refinement-benchmark.py \
   /path/to/capture \
   /path/to/colmap/sparse/0 \
@@ -87,6 +116,34 @@ npm run benchmark:features -- /path/to/refined-output \
   --output /path/to/refined-output/feature-tracking.json
 ```
 
+The bounded pose-correction experiment can be replayed against a raw capture. It is diagnostic and never marks its output safe for direct training; pairwise epipolar scoring proved insufficient to determine the correct correction direction.
+
+```bash
+npm run benchmark:features -- /path/to/capture \
+  --include-constraints \
+  --output /path/to/feature-constraints.json
+
+npm run optimize:poses -- \
+  /path/to/capture \
+  /path/to/feature-constraints.json \
+  /path/to/pose-candidate.json
+
+npm run compare:poses -- \
+  /path/to/pose-candidate.json \
+  /path/to/refined-output/telemetry/frames.jsonl
+```
+
+The multi-view experiment uses one deferred strong-feature identity across temporal offsets 1, 2, and 4, joins observations into tracks, triangulates landmarks, and alternates bounded SE(3) updates with retriangulation:
+
+```bash
+npm run optimize:landmarks -- \
+  /path/to/capture \
+  /path/to/feature-constraints.json \
+  /path/to/landmark-candidate.json
+```
+
+This output is also diagnostic-only. Use `--rotation-only` to isolate SO(3), or `--calibration /path/to/refinement.json` for a reference-calibration experiment. Neither option enables refined export.
+
 The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
 
 The capture HUD shows the UTC production build time. New captures also persist it as `applicationBuild.builtAt` in `capture.json`, making stale phone deployments identifiable from both the live UI and exported ZIP.
@@ -107,9 +164,10 @@ The capture HUD shows the UTC production build time. New captures also persist i
 - The tracker runs in a dedicated browser worker on accepted synchronized frames and persists `refinement/tracking.json`. Pose-independent RANSAC verification, inlier-only scoring, and bounded component repair connect 105/105 seesaw frames, 145/145 second-capture frames, and 113/113 latest validation frames in replay.
 - Multi-scale tracking caused severe phone CPU contention in a low-light test: candidate cadence fell from 0.27 seconds to 4.25 seconds. The worker now runs only single-scale BRIEF and adjacent matching during capture, then defers multi-scale recovery, component repair, and loop matching until capture stops.
 - Target-phone validation confirms the phase split restored a 0.266-second median candidate interval. Live matching remains at 480 pixels; a retained 720-pixel grayscale pass performs stronger bounded repair after stop. Latest-capture replay connects 113/113 frames in 11.2 desktop seconds while retaining 27.0 MB. `refinement/tracking.json` records phase, progress, timing, configuration, and retained grayscale bytes for phone validation.
-- Bounded shared calibration provides a phone-safe initialization, not a final camera solution. Its current estimates vary across captures because WebXR pose error and calibration error are still coupled; joint pose/calibration refinement remains required before direct training.
-- The second capture yields six long-range loop closures under the current bounded configuration, all validated against independent COLMAP poses; the latest capture yields three and the seesaw replay still yields none. Global SE(3) correction is not yet implemented, so direct-train readiness remains disabled and export continues to request downstream SfM.
+- Bounded shared calibration is diagnostic initialization, not a final camera solution. Its estimates vary across captures because WebXR pose and calibration errors are coupled.
+- The second capture yields six validated long-range loop closures; the seesaw replay yields none. Pairwise SE(3) correction is rejected. A multi-view landmark prototype improves one reference capture but regresses another despite improving held-out reprojection in both. Mobile pose refinement is therefore removed from the production path and retained only as a research tool.
+- Unified deferred matching across offsets 1/2/4 takes approximately 61–70 seconds on the development desktop. Production capture guidance should use only the bounded live/deferred checks needed for coverage and weak-bridge detection.
 - Registration and reprojection residual alone are insufficient for object readiness: a sparse low-light plush capture registered 32/32 frames through its patterned background despite inadequate object sampling. Target-region feature and coverage gates remain required.
-- A depth-derived seed point cloud is generated during ZIP export. Spirula interoperability still requires a direct import test of the new export.
+- A depth-derived seed point cloud is generated in the canonical archive. The new Spirula and LichtFeld destination packages still require direct end-to-end import tests in both desktop applications.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

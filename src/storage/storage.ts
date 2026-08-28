@@ -3,6 +3,7 @@ import type {
   CaptureDecision,
   CaptureFrame,
   CaptureMetadata,
+  CaptureReadinessReport,
   IMUSample,
   VisualTrackingReport,
 } from "../shared/types";
@@ -14,6 +15,7 @@ export interface CapturePersistence {
   appendDecision(captureId: string, decision: CaptureDecision, preview?: Blob): Promise<void>;
   appendImu(captureId: string, samples: IMUSample[]): Promise<void>;
   saveVisualTracking(captureId: string, report: VisualTrackingReport): Promise<void>;
+  saveCaptureReadiness(captureId: string, report: CaptureReadinessReport): Promise<void>;
   finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void>;
   loadCapture(captureId: string): Promise<CaptureDataset>;
   listCaptures(): Promise<CaptureMetadata[]>;

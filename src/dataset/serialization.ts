@@ -44,6 +44,8 @@ export interface PointCloudFile {
   data: Uint8Array;
 }
 
+export type ExportProfile = "canonical" | "spirula" | "lichtfeld";
+
 export function buildNerfstudioTransforms(
   frames: CaptureFrame[],
   plyFilePath?: string,
@@ -157,6 +159,13 @@ export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointClo
     });
   }
 
+  if (dataset.readiness) {
+    files.push({
+      path: "preflight/readiness.json",
+      data: JSON.stringify(dataset.readiness, null, 2) + "\n",
+    });
+  }
+
   if (dataset.refinement) {
     files.push({
       path: "transforms_webxr.json",
@@ -182,4 +191,86 @@ export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointClo
   for (const [path, data] of dataset.candidatePreviews ?? []) files.push({ path, data });
   if (pointCloud) files.push(pointCloud);
   return files;
+}
+
+export function buildExportFiles(
+  dataset: CaptureDataset,
+  profile: ExportProfile,
+  pointCloud?: PointCloudFile,
+): DatasetFile[] {
+  if (profile === "canonical") return buildDatasetFiles(dataset, pointCloud);
+
+  const destination = profile === "spirula" ? "Spirula Studio" : "LichtFeld Studio";
+  const files: DatasetFile[] = [
+    {
+      path: `README-${profile.toUpperCase()}.txt`,
+      data: destinationInstructions(profile),
+    },
+    {
+      path: "open3dcapture/export.json",
+      data: JSON.stringify({
+        format: "open3dcapture-destination-export",
+        version: 1,
+        profile,
+        destination,
+        sourceCaptureId: dataset.capture.captureId,
+        imageDirectory: "images",
+        finalPoseAuthority: "downstream-sfm",
+        webxrPoses: "open3dcapture/telemetry/frames.jsonl",
+        readiness: dataset.readiness ? "open3dcapture/preflight/readiness.json" : undefined,
+      }, null, 2) + "\n",
+    },
+    {
+      path: "open3dcapture/capture.json",
+      data: serializeCaptureMetadata(dataset.capture),
+    },
+    {
+      path: "open3dcapture/telemetry/frames.jsonl",
+      data: serializeFramesJsonl(dataset.frames),
+    },
+  ];
+
+  if (dataset.readiness) {
+    files.push({
+      path: "open3dcapture/preflight/readiness.json",
+      data: JSON.stringify(dataset.readiness, null, 2) + "\n",
+    });
+  }
+  if (dataset.visualTracking) {
+    files.push({
+      path: "open3dcapture/preflight/visual-tracking.json",
+      data: JSON.stringify(dataset.visualTracking, null, 2) + "\n",
+    });
+  }
+  for (const [path, data] of dataset.images) files.push({ path, data });
+  return files;
+}
+
+function destinationInstructions(profile: Exclude<ExportProfile, "canonical">): string {
+  if (profile === "spirula") {
+    return [
+      "Open Web 3D Capture — Spirula Studio handoff",
+      "",
+      "1. Extract this ZIP.",
+      "2. In Spirula Studio choose Create Dataset from Photos/Video.",
+      "3. Select the extracted images directory.",
+      "4. Run Spirula's native SfM (or its COLMAP workflow) before training.",
+      "",
+      "This package intentionally has no root transforms.json, sparse/, or colmap/ marker.",
+      "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
+      "",
+    ].join("\n");
+  }
+  return [
+    "Open Web 3D Capture — LichtFeld Studio handoff",
+    "",
+    "1. Extract this ZIP.",
+    "2. Open LichtFeld Studio and start the COLMAP Reconstruction plugin.",
+    "3. Select the extracted images directory as the photo input.",
+    "4. Run sparse reconstruction, inspect its quality metrics, then import/train.",
+    "",
+    "This package intentionally contains no fabricated COLMAP model.",
+    "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
+    "",
+  ].join("\n");
 }

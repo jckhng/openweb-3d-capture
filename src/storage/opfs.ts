@@ -3,6 +3,7 @@ import type {
   CaptureDecision,
   CaptureFrame,
   CaptureMetadata,
+  CaptureReadinessReport,
   IMUSample,
   VisualTrackingReport,
 } from "../shared/types";
@@ -25,6 +26,7 @@ export class OPFSCaptureStore implements CapturePersistence {
     const debug = await directory.getDirectoryHandle("debug");
     await debug.getDirectoryHandle("rejected", { create: true });
     await directory.getDirectoryHandle("refinement", { create: true });
+    await directory.getDirectoryHandle("preflight", { create: true });
     await writeJson(directory, "capture.json", metadata);
   }
 
@@ -77,6 +79,12 @@ export class OPFSCaptureStore implements CapturePersistence {
     const directory = await this.captureDirectory(captureId);
     const refinement = await directory.getDirectoryHandle("refinement", { create: true });
     await writeJson(refinement, "tracking.json", report);
+  }
+
+  async saveCaptureReadiness(captureId: string, report: CaptureReadinessReport): Promise<void> {
+    const directory = await this.captureDirectory(captureId);
+    const preflight = await directory.getDirectoryHandle("preflight", { create: true });
+    await writeJson(preflight, "readiness.json", report);
   }
 
   async finalizeCapture(captureId: string, metadata: CaptureMetadata): Promise<void> {
@@ -149,7 +157,14 @@ export class OPFSCaptureStore implements CapturePersistence {
     } catch {
       // Captures created before incremental visual tracking have no report.
     }
-    return { capture, frames, decisions, imu, images, depths, candidatePreviews, visualTracking };
+    let readiness: CaptureReadinessReport | undefined;
+    try {
+      const preflight = await directory.getDirectoryHandle("preflight");
+      readiness = await readJson<CaptureReadinessReport>(preflight, "readiness.json");
+    } catch {
+      // Captures created before capture preflight have no readiness report.
+    }
+    return { capture, frames, decisions, imu, images, depths, candidatePreviews, visualTracking, readiness };
   }
 
   async listCaptures(): Promise<CaptureMetadata[]> {
