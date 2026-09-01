@@ -11,6 +11,7 @@
     "analyze:quality": "vite-node tools/analyze-image-quality.mjs",
     "analyze:readiness": "vite-node tools/analyze-readiness.mjs",
     "refine:colmap": ".venv-refinement/bin/python tools/run-colmap-reference.py",
+    "validate": "vite-node tools/validate-dataset.mjs",
     "benchmark:features": "vite-node tools/benchmark-features.mjs",
     "optimize:poses": "vite-node tools/optimize-poses.mjs",
     "optimize:landmarks": "vite-node tools/optimize-landmarks.mjs",

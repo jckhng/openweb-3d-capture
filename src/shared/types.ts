@@ -208,6 +208,9 @@ export interface VisualTrackingEdge {
   matches: number;
   geometricInliers?: number;
   geometricInlierRatio?: number;
+  /** Inliers whose observations both fall inside the centered target-region proxy. */
+  targetRegionInliers?: number;
+  targetRegionInlierRatio?: number;
   medianResidualPixels: number;
   p90ResidualPixels: number;
   accepted: boolean;
@@ -266,6 +269,18 @@ export interface VisualTrackingReport {
   };
   /** Added only to the final report so live worker updates stay small. */
   poseConstraints?: VisualPoseConstraint[];
+  /** Informational only until target-region thresholds are calibrated on hardware. */
+  targetRegion?: {
+    linearFraction: number;
+    featureObservations: number;
+    targetRegionFeatureObservations: number;
+    targetRegionFeatureFraction: number;
+    acceptedEdges: number;
+    edgesWithTargetRegionInliers: number;
+    geometricInliers: number;
+    targetRegionInliers: number;
+    targetRegionInlierFraction: number;
+  };
   edges: VisualTrackingEdge[];
 }
 

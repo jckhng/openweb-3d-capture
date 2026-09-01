@@ -82,6 +82,11 @@ export function App() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  async function startGuidedCapture() {
+    await controller.start();
+    await controller.startBasicCapture();
+  }
+
   return (
     <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
@@ -90,7 +95,7 @@ export function App() {
         <p className="header-build-id">
           Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
         </p>
-        <p className="lede">Capture validated images for reconstruction in Spirula or LichtFeld.</p>
+        <p className="lede">Follow the live angle guide, close the orbit, then export reconstruction-ready photos.</p>
       </header>
 
       {error || snapshot.lastError ? (
@@ -107,20 +112,23 @@ export function App() {
         </p>
         <div className="capture-status">
           <div>
-            <span>accepted frames</span>
-            <strong>{snapshot.captureProgress.current}</strong>
+            <span>{snapshot.captureId ? "views" : "scan"}</span>
+            <strong>{snapshot.captureId ? snapshot.captureProgress.current : "ready"}</strong>
           </div>
           <div>
-            <span>{snapshot.captureId ? "rejected" : "capture state"}</span>
-            <strong>{snapshot.captureId ? snapshot.captureQuality.rejected : "idle"}</strong>
+            <span>{snapshot.captureId ? "orbit" : "minimum distance"}</span>
+            <strong>
+              {snapshot.captureId
+                ? `${snapshot.captureReadiness?.metrics.azimuthBinsCovered ?? 0}/${snapshot.captureReadiness?.metrics.azimuthBinCount ?? 12}`
+                : `${MINIMUM_TARGET_DISTANCE_CM} cm`}
+            </strong>
           </div>
           <div>
-            <span>{snapshot.captureId ? "sharpness" : "minimum target"}</span>
-            <strong className={snapshot.captureId && snapshot.captureQuality.sharpnessScore < snapshot.captureQuality.sharpnessThreshold
-              ? "unavailable"
-              : "available"}
-            >
-              {snapshot.captureId ? formatPercent(snapshot.captureQuality.sharpnessScore) : 50}
+            <span>{snapshot.captureId ? "connected" : "last result"}</span>
+            <strong>
+              {snapshot.captureId
+                ? `${snapshot.visualTracking.connectedFrameCount}/${snapshot.captureProgress.current}`
+                : snapshot.lastReadiness ? readinessLabel(snapshot.lastReadiness.status) : "new"}
             </strong>
           </div>
         </div>
@@ -135,9 +143,9 @@ export function App() {
             <button
               className="primary"
               disabled={Boolean(busy)}
-              onClick={() => void run("starting XR", () => controller.start())}
+              onClick={() => void run("starting guided scan", startGuidedCapture)}
             >
-              Start XR
+              Start guided scan
             </button>
           ) : null}
           {snapshot.running && !snapshot.captureId ? (
@@ -146,37 +154,38 @@ export function App() {
               disabled={Boolean(busy)}
               onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
             >
-              Start capture
+              Scan another object
             </button>
           ) : null}
           {snapshot.captureId ? (
             <button
-              className="danger"
+              className={snapshot.captureReadiness?.status === "ready" ? "primary" : "danger"}
               disabled={Boolean(busy)}
               onClick={() => void run("saving capture", () => controller.stopCapture())}
             >
-              Stop and save
+              {snapshot.captureReadiness?.status === "ready" ? "Finish scan" : "Stop and review"}
             </button>
           ) : null}
           {!snapshot.captureId && snapshot.lastCaptureId ? (
             <>
               <button
-                disabled={Boolean(busy)}
-                onClick={() => void run("exporting canonical archive", () => downloadCapture("canonical"))}
-              >
-                Archive ZIP
-              </button>
-              <button
+                className="primary"
                 disabled={Boolean(busy)}
                 onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula"))}
               >
-                Spirula ZIP
+                Export to Spirula
               </button>
               <button
                 disabled={Boolean(busy)}
                 onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld"))}
               >
-                LichtFeld ZIP
+                Export to LichtFeld
+              </button>
+              <button
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting canonical archive", () => downloadCapture("canonical"))}
+              >
+                Full archive
               </button>
             </>
           ) : null}
@@ -298,6 +307,24 @@ export function App() {
             label="retained grayscale"
             value={snapshot.visualTracking.processing
               ? `${(snapshot.visualTracking.processing.retainedGrayBytes / 1024 / 1024).toFixed(1)} MB`
+              : "unavailable"}
+          />
+          <Metric
+            label="target-region features"
+            value={snapshot.visualTracking.targetRegion
+              ? formatPercent(snapshot.visualTracking.targetRegion.targetRegionFeatureFraction)
+              : "unavailable"}
+          />
+          <Metric
+            label="target-region inliers"
+            value={snapshot.visualTracking.targetRegion
+              ? formatPercent(snapshot.visualTracking.targetRegion.targetRegionInlierFraction)
+              : "unavailable"}
+          />
+          <Metric
+            label="target-supported edges"
+            value={snapshot.visualTracking.targetRegion
+              ? `${snapshot.visualTracking.targetRegion.edgesWithTargetRegionInliers} / ${snapshot.visualTracking.targetRegion.acceptedEdges}`
               : "unavailable"}
           />
           <Metric
@@ -522,7 +549,7 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
   if (!snapshot.running) {
     return snapshot.lastReadiness
       ? `${readinessLabel(snapshot.lastReadiness.status)} — ${snapshot.lastReadiness.primaryAction}`
-      : "Start XR on the Android phone before recording.";
+      : "Center a well-lit object, stand at least 45 cm away, and start the guided scan.";
   }
   if (!snapshot.captureId) {
     if (snapshot.lastReadiness) {
@@ -561,11 +588,17 @@ function liveReadinessInstruction(report?: CaptureReadinessReport): string {
   if (!report) return "GOOD — continue around the object.";
   const frames = report.metrics.imageFrames;
   if (frames < 12) return "GOOD — continue a level orbit around the object.";
+  const overlap = report.issues.find(
+    (issue) => issue.code === "visual-disconnected" || issue.code === "weak-bridge",
+  );
+  if (overlap) return overlap.action;
   const azimuth = report.issues.find((issue) => issue.code === "missing-azimuth");
   if (frames >= 24 && azimuth) return azimuth.action;
   const elevation = report.issues.find((issue) => issue.code === "missing-elevation");
   if (frames >= 36 && elevation) return elevation.action;
   if (frames < 50) return `GOOD — add ${50 - frames} more distinct views.`;
+  const loop = report.issues.find((issue) => issue.code === "loop-not-closed");
+  if (loop) return loop.action;
   return report.primaryAction;
 }
 

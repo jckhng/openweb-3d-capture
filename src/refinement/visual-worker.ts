@@ -14,6 +14,11 @@ import {
 import { verifyFeatureGeometry } from "./geometric-verification";
 import { scoreEpipolarConsistency } from "./reprojection";
 import { VisualConnectivityGraph } from "./visual-graph";
+import {
+  countTargetRegionFeatures,
+  isPointInTargetRegion,
+  summarizeTargetRegionSupport,
+} from "./target-region";
 import type {
   VisualTrackingFrameInput,
   VisualWorkerRequest,
@@ -63,6 +68,8 @@ let capturePhaseMaximumFrameMilliseconds = 0;
 let deferredRefinementMilliseconds = 0;
 let processingPhase: "capture" | "deferred" | "complete" = "capture";
 let deferredRepairAttempts = 0;
+let featureObservations = 0;
+let targetRegionFeatureObservations = 0;
 
 scope.onmessage = (event) => {
   queue = queue.then(async () => {
@@ -77,6 +84,8 @@ scope.onmessage = (event) => {
       deferredRefinementMilliseconds = 0;
       processingPhase = "capture";
       deferredRepairAttempts = 0;
+      featureObservations = 0;
+      targetRegionFeatureObservations = 0;
       scope.postMessage({ type: "update", report: reportWithProcessing() });
       return;
     }
@@ -132,6 +141,13 @@ async function trackFrame(input: VisualTrackingFrameInput): Promise<void> {
       cellSize: 12,
     }),
   };
+  const targetFeatures = countTargetRegionFeatures(
+    frame.briefFeatures,
+    frame.briefWidth,
+    frame.briefHeight,
+  );
+  featureObservations += targetFeatures.featureObservations;
+  targetRegionFeatureObservations += targetFeatures.targetRegionFeatureObservations;
 
   const previous = retained.at(-1);
   if (previous) {
@@ -169,6 +185,10 @@ function matchEdge(
   }));
   const geometry = verifyFeatureGeometry(pointMatches, a.sourceWidth, a.sourceHeight);
   const inlierMatches = geometry.inlierIndices.map((index) => pointMatches[index]);
+  const targetRegionInliers = inlierMatches.filter((match) => (
+    isPointInTargetRegion(match.pointA, a.sourceWidth, a.sourceHeight) &&
+    isPointInTargetRegion(match.pointB, b.sourceWidth, b.sourceHeight)
+  )).length;
   const score = scoreEpipolarConsistency(
     inlierMatches.length ? inlierMatches : pointMatches,
     a.cameraToWorld,
@@ -199,6 +219,8 @@ function matchEdge(
     matches: matches.length,
     geometricInliers: geometry.inliers,
     geometricInlierRatio: geometry.inlierRatio,
+    targetRegionInliers,
+    targetRegionInlierRatio: geometry.inliers > 0 ? targetRegionInliers / geometry.inliers : 0,
     medianResidualPixels: score.medianPixels,
     p90ResidualPixels: score.p90Pixels,
     accepted: geometry.accepted,
@@ -238,6 +260,10 @@ function reportWithProcessing() {
     deferredRepairAttempts,
     deferredMaximumRepairAttempts: MAXIMUM_REPAIR_ATTEMPTS,
   };
+  report.targetRegion = summarizeTargetRegionSupport({
+    featureObservations,
+    targetRegionFeatureObservations,
+  }, report.edges);
   return report;
 }
 

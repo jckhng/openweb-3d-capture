@@ -73,6 +73,20 @@ It creates `pointcloud.ply` and atomically adds `"ply_file_path": "pointcloud.pl
 npm run pointcloud -- /path/to/capture-directory --force
 ```
 
+## Validate an exported capture
+
+The validator accepts either the downloaded ZIP or an extracted capture directory:
+
+```bash
+npm run validate -- /path/to/capture.zip
+npm run validate -- /path/to/capture-directory
+```
+
+It checks Nerfstudio transforms and intrinsics, JPEG dimensions and references,
+synchronized-image status, frame counts and timestamps, pose motion, depth payloads,
+IMU/decision telemetry, the seed PLY, and the visual-tracking report. Errors produce
+a non-zero exit status. Machine-readable output is available with `--json`.
+
 ## Prepare a refined desktop dataset
 
 The refinement tools use an isolated Python environment. The system COLMAP installation is not changed.
@@ -169,5 +183,7 @@ The capture HUD shows the UTC production build time. New captures also persist i
 - Unified deferred matching across offsets 1/2/4 takes approximately 61–70 seconds on the development desktop. Production capture guidance should use only the bounded live/deferred checks needed for coverage and weak-bridge detection.
 - Registration and reprojection residual alone are insufficient for object readiness: a sparse low-light plush capture registered 32/32 frames through its patterned background despite inadequate object sampling. Target-region feature and coverage gates remain required.
 - A depth-derived seed point cloud is generated in the canonical archive. The new Spirula and LichtFeld destination packages still require direct end-to-end import tests in both desktop applications.
+- The worker now records feature and geometric-inlier concentration inside the centered 60% target-region proxy. These values are informational until hardware captures calibrate a safe readiness threshold.
+- A depth-derived seed point cloud is generated during ZIP export. Direct Spirula Studio import and training have been confirmed; raw WebXR pose registration still produces low-quality geometry and requires downstream SfM/refinement.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.

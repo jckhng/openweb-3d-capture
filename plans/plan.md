@@ -70,12 +70,14 @@ Implemented:
 * minimal live orbit strip and post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
 * destination packages that retain WebXR provenance without root pose/reconstruction markers
+* extracted-directory and ZIP dataset validator with Nerfstudio, image, pose, depth, PLY, and tracking checks
+* informational centered target-region feature and geometric-inlier telemetry
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (62 tests)
+npm test        PASS (69 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -134,6 +136,7 @@ Hardware and reconstruction evidence:
 * the same fixed configuration produces 1,186 landmarks on the independent 145-frame dataset and improves held-out landmark residual, yet median COLMAP disagreement regresses from 1.79 to 1.80 cm and from 1.34 to 1.36 degrees
 * known COLMAP calibration does not remove the 142-frame translation outliers; track geometry and the alternating optimizer remain the primary limitations
 * unified deferred matching costs approximately 61–70 seconds on the development desktop versus less than 0.5 seconds for track joining, triangulation, and pose replay; the current matcher is not phone-ready
+* direct Spirula Studio import and training of the WebXR/seed-cloud export succeeds; raw-pose registration quality remains inadequate without downstream SfM
 
 M2 calibration findings:
 
@@ -181,7 +184,7 @@ Plan constraints clarified by implementation:
 * WebXR poses are metric navigation priors, not reconstruction-grade final poses. Production training uses downstream visual SfM.
 * Current Spirula desktop builds can run native SfM from raw photos/video. LichtFeld can run COLMAP reconstruction through its plugin. Exports must make both paths explicit.
 * The deferred phase split restores sub-second candidate cadence on the target phone. Do not start SE(3) work until the higher-resolution deferred repair is deployed and confirms a connected graph without capture regression or false loops.
-* Registration percentage and reprojection error alone can produce a false-positive readiness result when features lie mainly on the background. Add minimum sampling, target-region feature support, and coverage gates before trusting desktop or phone `directTrainReady` for object capture.
+* Registration percentage and reprojection error alone can produce a false-positive readiness result when features lie mainly on the background. Centered target-region feature/inlier telemetry is now recorded, but minimum sampling and coverage thresholds still require calibration before trusting desktop or phone `directTrainReady` for object capture.
 * The current approach is fail-safe but not yet universally reconstruction-robust: it preserves raw data, gates unverified refinement, and falls back to downstream SfM, but fixed-focus WebXR imposes an unrecoverable optical-quality limit for small or close subjects.
 * Do not couple the open dataset schema to one capture frontend. WebXR, an autofocus-photo fallback, and any future native precision frontend must produce the same raw/refined provenance model and downstream-compatible exports.
 
@@ -1278,6 +1281,13 @@ IMU available
 ```
 
 This is valuable for agent development and debugging.
+
+Implementation status:
+
+* `npm run validate -- <capture-directory-or-zip>` accepts extracted captures and direct ZIP exports
+* validates transforms, finite homogeneous poses, intrinsics, JPEG references and dimensions, timestamps, pose extent/baseline, synchronized WebXR images, depth payload sizes, telemetry counts, binary RGB PLY contents, and visual-tracking safety fields
+* `--json` provides machine-readable output and validation errors return a non-zero exit status
+* target-region and object-coverage thresholds remain informational until calibrated on hardware
 
 ---
 
