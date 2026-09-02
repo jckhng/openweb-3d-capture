@@ -1,6 +1,6 @@
 # Project Plan: Open Web 3D Capture
 
-## 0. Implementation status — 28 August 2026
+## 0. Implementation status — 2 September 2026
 
 Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression and deferred repair are validated on the target phone. Pairwise SE(3) correction is rejected. A bounded multi-view landmark prototype improves one reference capture and regresses another despite passing its internal score. On-phone pose refinement is therefore removed from the production critical path. M3 capture preflight, coverage guidance, and destination-specific Spirula/LichtFeld handoff are now the active product milestones.
 
@@ -67,9 +67,14 @@ Implemented:
 * destination-independent capture-readiness report with explicit repair/risk reason codes
 * object-centered twelve-sector azimuth coverage and low/level/high elevation analysis
 * visual disconnection, weak adjacent bridge, and physical/visual loop-return checks
-* minimal live orbit strip and post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
+* translucent rotating 12-longitude × 4-latitude coverage globe with 28 required capture checkpoints
+* explicit move → hold → confirm → advance capture phases, separating navigation from sharp image acquisition
+* bounded two-frame stationary bursts admitted after each novel viewpoint, with haptic and visual completion confirmation
+* checkpoint cells that remain incomplete until two sharp, low-motion reconstruction images are retained
+* post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
 * destination packages that retain WebXR provenance without root pose/reconstruction markers
+* conservative destination image selection: complete 50-image/12-azimuth checkpoint sets use stationary burst images; incomplete sets fall back to all images
 * extracted-directory and ZIP dataset validator with Nerfstudio, image, pose, depth, PLY, and tracking checks
 * informational centered target-region feature and geometric-inlier telemetry
 
@@ -77,7 +82,7 @@ Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (69 tests)
+npm test        PASS (73 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -1001,10 +1006,11 @@ Experiment conclusion:
 
 Next production bound:
 
-1. validate the new readiness guidance on the target phone and tune only thresholds that produce demonstrated false prompts
-2. run the same capture set through Spirula native SfM and the LichtFeld COLMAP plugin; record registration rate, reconstruction quality, manual steps, and handoff time
-3. add sector-specific repair visualization or representative thumbnails when a text/strip instruction is insufficient to locate a weak bridge
-4. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
+1. validate the move/hold/confirm globe guidance, haptics, checkpoint persistence, and sector targeting on the target phone
+2. compare the checkpoint-selected Spirula/LichtFeld image set against the full canonical set for registration rate, blur, reconstruction quality, and handoff time
+3. tune the two-frame burst, low-motion limit, and 50-image export gate only from hardware evidence
+4. add representative checkpoint thumbnails when the globe alone is insufficient to locate a weak bridge
+5. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
 
 ---
 
@@ -1025,7 +1031,21 @@ Then approximate target position using depth if available.
 
 If not available, use an assumed/default object distance and refine later.
 
-Maintain spherical viewpoint coverage around the target.
+Maintain spherical viewpoint coverage around the target. Coverage navigation and reconstruction-image acquisition are separate phases:
+
+```text
+MOVE to highlighted checkpoint
+    ↓
+STOP and hold steady
+    ↓
+capture a bounded sharp burst
+    ↓
+CONFIRM cell with light + haptic
+    ↓
+ADVANCE to next highlighted checkpoint
+```
+
+The normal capture UI uses a translucent rotating globe. It has twelve longitude sectors and four latitude bands (`level`, `raised`, `high`, and `low`). Required checkpoints are denser around the level orbit and sparser at steep elevations. Reverse-side cells remain visible through the sphere.
 
 Conceptually:
 
@@ -1047,12 +1067,12 @@ Conceptually:
 Each cell records:
 
 ```text
-unseen
-poor
-good
+empty
+sampled
+captured
 ```
 
-based on accepted camera poses.
+`captured` requires two retained images below the stationary-motion limit and above the sharpness floor. A moving pose may update navigation but must not complete a cell.
 
 ---
 

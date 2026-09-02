@@ -1,6 +1,6 @@
 # Open Web 3D Capture
 
-Current scope: capture preflight, object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, unsynchronized images, and redundant poses, then writes accepted images, raw WebXR poses, CPU depth, and capture-window IMU data directly to OPFS. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
+Current scope: capture preflight, stop-and-shoot object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, and unsynchronized images. At each new viewpoint it records a bounded stationary burst, retains accepted frames and capture telemetry in the canonical archive, and selects the sharp low-motion checkpoint images for destination exports once coverage is sufficient. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
 
 ## Run locally
 
@@ -34,24 +34,24 @@ M2 test sequence:
 2. Select **Start XR** and grant requested permissions.
 3. Confirm pose, projection matrix, intrinsics, and frame rate change live.
 4. Center a static, textured object at least 45 cm from the phone. Confirm the live target-distance value is plausible, then select **Start capture**.
-5. Confirm the reticle and instruction react to close range, sharpness, motion, tracking, and redundant views.
-6. Move slowly around the object, including low, level, and elevated viewpoints.
-7. Select **Stop and save** after 50–100 accepted frames.
+5. Move to the highlighted translucent-globe sector. Movement is navigation only; the app does not expect a sharp keyframe while walking.
+6. Stop briefly and hold the phone steady while the app records a two-frame sharp burst. Wait for the haptic and **SECTOR CAPTURED** confirmation before moving again.
+7. Repeat for the required level, raised, high, and low checkpoints. Select **Stop and save** when the globe and readiness result show sufficient coverage.
 8. Select **Export latest**.
 9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
 10. Reconstruct the images through Spirula native SfM or LichtFeld's COLMAP Reconstruction plugin before training. Do not treat the WebXR transform file as final reconstruction poses.
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
 
-After capture, the app reports one of `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`. The report checks image availability and synchronization, accepted-frame sharpness, twelve-sector orbit coverage, elevation diversity, visual connectivity, weak adjacent bridges, and loop return. It is saved as `preflight/readiness.json` in the canonical archive.
+During capture, a translucent 12-longitude by 4-latitude globe rotates with the camera. Twenty-eight required checkpoints light only after two sharp, low-motion images are retained at that viewpoint. After capture, the app reports one of `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`. The report checks image availability and synchronization, sharpness, orbit coverage, elevation diversity, visual connectivity, weak adjacent bridges, and loop return. It is saved as `preflight/readiness.json` in the canonical archive.
 
 Three export buttons are available:
 
 - **Archive ZIP** preserves the complete canonical dataset, including raw WebXR transforms, depth, IMU, diagnostics, and optional seed point cloud.
-- **Spirula ZIP** contains the reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. It intentionally omits root reconstruction markers so native SfM runs.
-- **LichtFeld ZIP** contains the reconstruction images, provenance, readiness report, and instructions for the COLMAP Reconstruction plugin. It intentionally contains no fabricated COLMAP model.
+- **Spirula ZIP** contains reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. Images are checkpoint-selected when the safety gate passes. The package intentionally omits root reconstruction markers so native SfM runs.
+- **LichtFeld ZIP** contains reconstruction images, provenance, readiness report, and instructions for the COLMAP Reconstruction plugin. Images are checkpoint-selected when the safety gate passes. The package intentionally contains no fabricated COLMAP model.
 
-Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority.
+Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. Checkpoint-only export requires at least 50 selected images spanning all 12 azimuth sectors; otherwise the exporter includes every image so downstream SfM can recover the incomplete capture. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
 
 Replay the same readiness checks against an existing capture without modifying it:
 

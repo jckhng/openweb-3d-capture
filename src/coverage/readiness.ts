@@ -1,5 +1,7 @@
 import { isFiniteMatrix, poseTranslationDistance, rotationAngleDifference, translationOf } from "../shared/matrix";
 import type {
+  CaptureCoverageCell,
+  CaptureCoverageLatitude,
   CaptureDecision,
   CaptureFrame,
   CaptureReadinessIssue,
@@ -17,6 +19,20 @@ const ELEVATION_BAND_ANGLE_DEGREES = 8;
 const MINIMUM_ELEVATION_SPAN_DEGREES = 20;
 const MINIMUM_FRAMES_FOR_VISUAL_CHECK = 12;
 const MAXIMUM_LOOP_ROTATION_RADIANS = 25 * Math.PI / 180;
+const MAXIMUM_CHECKPOINT_MOTION_SCORE = 0.55;
+const CHECKPOINT_BURST_SAMPLES = 2;
+
+const COVERAGE_LATITUDE_BANDS: ReadonlyArray<{
+  latitude: CaptureCoverageLatitude;
+  minimumDegrees: number;
+  maximumDegrees: number;
+  requiredStride: number;
+}> = [
+  { latitude: "low", minimumDegrees: -35, maximumDegrees: -5, requiredStride: 2 },
+  { latitude: "level", minimumDegrees: -5, maximumDegrees: 10, requiredStride: 1 },
+  { latitude: "raised", minimumDegrees: 10, maximumDegrees: 25, requiredStride: 2 },
+  { latitude: "high", minimumDegrees: 25, maximumDegrees: 50, requiredStride: 3 },
+];
 
 type ElevationBand = "low" | "level" | "high";
 
@@ -173,6 +189,12 @@ export function analyzeCaptureReadiness(
       missingAzimuthBins: coverage.missingAzimuthBins,
       elevationBandsCovered: coverage.elevationBandsCovered,
       elevationSpanDegrees: coverage.elevationSpanDegrees,
+      coverageCells: coverage.cells,
+      coverageCheckpointsCompleted: coverage.cells.filter(
+        (cell) => cell.required && cell.state === "captured",
+      ).length,
+      coverageCheckpointsRequired: coverage.cells.filter((cell) => cell.required).length,
+      currentCoverageCell: coverage.currentCell,
       targetEstimate,
       visualConnectedFrames: visual.connectedFrameCount,
       visualComponentCount: visual.componentCount,
@@ -287,18 +309,24 @@ function analyzeCoverage(
   missingAzimuthBins: number[];
   elevationBandsCovered: ElevationBand[];
   elevationSpanDegrees: number;
+  cells: CaptureCoverageCell[];
+  currentCell?: { azimuthBin: number; latitude: CaptureCoverageLatitude };
 } {
+  const cells = createCoverageCells();
   if (!target) {
     return {
       azimuthBinsCovered: 0,
       missingAzimuthBins: Array.from({ length: AZIMUTH_BIN_COUNT }, (_, index) => index),
       elevationBandsCovered: [],
       elevationSpanDegrees: 0,
+      cells,
     };
   }
   const bins = new Set<number>();
   const bands = new Set<ElevationBand>();
   const elevations: number[] = [];
+  const stableCandidates = new Map<string, CaptureFrame[]>();
+  let currentCell: { azimuthBin: number; latitude: CaptureCoverageLatitude } | undefined;
   for (const frame of frames) {
     const position = translationOf(frame.cameraToWorld);
     const delta = subtract(position, target);
@@ -306,7 +334,8 @@ function analyzeCoverage(
     if (horizontal < 0.05) continue;
     const azimuth = Math.atan2(delta[0], delta[2]);
     const normalized = (azimuth + Math.PI) / (2 * Math.PI);
-    bins.add(Math.min(AZIMUTH_BIN_COUNT - 1, Math.floor(normalized * AZIMUTH_BIN_COUNT)));
+    const azimuthBin = Math.min(AZIMUTH_BIN_COUNT - 1, Math.floor(normalized * AZIMUTH_BIN_COUNT));
+    bins.add(azimuthBin);
     const elevation = Math.atan2(delta[1], horizontal) * 180 / Math.PI;
     elevations.push(elevation);
     bands.add(
@@ -316,6 +345,34 @@ function analyzeCoverage(
           ? "high"
           : "level",
     );
+    const latitude = coverageLatitude(elevation);
+    currentCell = { azimuthBin, latitude };
+    const cell = cells.find(
+      (candidate) => candidate.azimuthBin === azimuthBin && candidate.latitude === latitude,
+    );
+    if (!cell) continue;
+    const sharpness = frameSharpness(frame);
+    cell.frameCount += 1;
+    if (frame.quality.motionScore <= MAXIMUM_CHECKPOINT_MOTION_SCORE) {
+      cell.stableFrameCount += 1;
+      cell.bestSharpness = Math.max(cell.bestSharpness, sharpness);
+      const key = `${cell.latitude}:${cell.azimuthBin}`;
+      const candidates = stableCandidates.get(key) ?? [];
+      candidates.push(frame);
+      stableCandidates.set(key, candidates);
+    }
+  }
+  for (const cell of cells) {
+    cell.selectedFrameIds = [...(stableCandidates.get(`${cell.latitude}:${cell.azimuthBin}`) ?? [])]
+      .sort((left, right) => frameSharpness(right) - frameSharpness(left))
+      .filter((frame) => frameSharpness(frame) >= MINIMUM_SHARPNESS)
+      .slice(0, CHECKPOINT_BURST_SAMPLES)
+      .map((frame) => frame.id);
+    cell.state = cell.selectedFrameIds.length >= CHECKPOINT_BURST_SAMPLES
+      ? "captured"
+      : cell.frameCount > 0
+        ? "sampled"
+        : "empty";
   }
   return {
     azimuthBinsCovered: bins.size,
@@ -326,7 +383,34 @@ function analyzeCoverage(
     elevationSpanDegrees: elevations.length
       ? Math.max(...elevations) - Math.min(...elevations)
       : 0,
+    cells,
+    currentCell,
   };
+}
+
+function createCoverageCells(): CaptureCoverageCell[] {
+  return COVERAGE_LATITUDE_BANDS.flatMap((band) => (
+    Array.from({ length: AZIMUTH_BIN_COUNT }, (_, azimuthBin): CaptureCoverageCell => ({
+      azimuthBin,
+      latitude: band.latitude,
+      required: azimuthBin % band.requiredStride === 0,
+      frameCount: 0,
+      stableFrameCount: 0,
+      bestSharpness: 0,
+      selectedFrameIds: [],
+      state: "empty",
+    }))
+  ));
+}
+
+function coverageLatitude(elevationDegrees: number): CaptureCoverageLatitude {
+  return COVERAGE_LATITUDE_BANDS.find(
+    (band) => elevationDegrees >= band.minimumDegrees && elevationDegrees < band.maximumDegrees,
+  )?.latitude ?? (elevationDegrees < COVERAGE_LATITUDE_BANDS[0].minimumDegrees ? "low" : "high");
+}
+
+function frameSharpness(frame: CaptureFrame): number {
+  return clamp01(1 - frame.quality.blurScore);
 }
 
 function analyzeVisualTracking(

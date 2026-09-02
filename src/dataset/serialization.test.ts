@@ -355,6 +355,96 @@ describe("Nerfstudio serialization", () => {
         files.find((file) => file.path === "open3dcapture/export.json")!.data as string,
       );
       expect(manifest).toMatchObject({ profile, finalPoseAuthority: "downstream-sfm" });
+      expect(manifest.imageSelection.mode).toBe("all-images-fallback");
     }
+  });
+
+  it("hands destination tools only complete stationary checkpoint bursts", () => {
+    const checkpointCoordinates = [
+      ...Array.from({ length: 12 }, (_, azimuthBin) => ({ azimuthBin, latitude: "level" as const })),
+      ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, latitude: "raised" as const })),
+      ...[0, 3, 6, 9].map((azimuthBin) => ({ azimuthBin, latitude: "high" as const })),
+      ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, latitude: "low" as const })),
+    ];
+    const selectedFrames = checkpointCoordinates.flatMap((_, checkpointIndex) => (
+      [0, 1].map((offset) => {
+        const id = checkpointIndex * 2 + offset;
+        return { ...frame, id, imagePath: `images/${String(id).padStart(6, "0")}.jpg` };
+      })
+    ));
+    const movingFrame = {
+      ...frame,
+      id: selectedFrames.length,
+      imagePath: `images/${String(selectedFrames.length).padStart(6, "0")}.jpg`,
+    };
+    const frames = [...selectedFrames, movingFrame];
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-checkpoints",
+        createdAt: "2026-09-02T00:00:00.000Z",
+        updatedAt: "2026-09-02T00:00:00.000Z",
+        captureMode: "object",
+        source: "webxr",
+        units: "meters",
+        frameCount: frames.length,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames,
+      decisions: [],
+      imu: [],
+      images: new Map(frames.map((candidate) => [candidate.imagePath!, new Blob(["jpg"])])),
+      depths: new Map(),
+      readiness: {
+        format: "open3dcapture-readiness",
+        version: 1,
+        status: "ready",
+        primaryAction: "Ready.",
+        generatedAt: "2026-09-02T00:00:00.000Z",
+        metrics: {
+          acceptedFrames: frames.length,
+          imageFrames: frames.length,
+          synchronizedImageFrames: frames.length,
+          synchronizedImageRatio: 1,
+          p10AcceptedSharpness: 1,
+          azimuthBinsCovered: 12,
+          azimuthBinCount: 12,
+          missingAzimuthBins: [],
+          elevationBandsCovered: ["low", "level", "high"],
+          elevationSpanDegrees: 40,
+          coverageCells: checkpointCoordinates.map((coordinate, checkpointIndex) => ({
+            ...coordinate,
+            required: true,
+            frameCount: 2,
+            stableFrameCount: 2,
+            bestSharpness: 1,
+            selectedFrameIds: [checkpointIndex * 2, checkpointIndex * 2 + 1],
+            state: "captured",
+          })),
+          coverageCheckpointsCompleted: 28,
+          coverageCheckpointsRequired: 28,
+          visualConnectedFrames: frames.length,
+          visualComponentCount: 1,
+          adjacentEdgeCoverage: 1,
+          loopClosureDetected: true,
+          physicalLoopClosed: true,
+        },
+        issues: [],
+      },
+    };
+
+    const files = buildExportFiles(dataset, "spirula");
+    const manifest = JSON.parse(
+      files.find((file) => file.path === "open3dcapture/export.json")!.data as string,
+    );
+    expect(manifest.imageSelection).toMatchObject({
+      mode: "stationary-checkpoints",
+      sourceImageCount: 57,
+      selectedImageCount: 56,
+    });
+    expect(files.map((file) => file.path)).not.toContain(movingFrame.imagePath);
   });
 });

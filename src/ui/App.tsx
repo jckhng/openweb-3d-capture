@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import type { DiagnosticSnapshot } from "../xr/diagnostic-controller";
 import { XRDiagnosticController } from "../xr/diagnostic-controller";
@@ -10,6 +10,7 @@ import { isOpfsSupported } from "../storage/storage";
 import { BUILD_TIMESTAMP, formatBuildTimestamp } from "../shared/build";
 import type { CaptureReadinessReport } from "../shared/types";
 import type { ExportProfile } from "../dataset/zip";
+import { CaptureGlobe } from "./CaptureGlobe";
 
 const MINIMUM_TARGET_DISTANCE_CM = Math.round(
   DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
@@ -26,6 +27,7 @@ export function App() {
   const [captures, setCaptures] = useState<CaptureMetadata[]>([]);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const previousCheckpointCount = useRef(0);
 
   const refreshCaptures = async () => setCaptures(await store.listCaptures());
 
@@ -53,6 +55,18 @@ export function App() {
     document.documentElement.classList.toggle("xr-active-root", snapshot.running);
     return () => document.documentElement.classList.remove("xr-active-root");
   }, [snapshot.running]);
+
+  useEffect(() => {
+    if (!snapshot.captureId) {
+      previousCheckpointCount.current = 0;
+      return;
+    }
+    const completed = snapshot.captureReadiness?.metrics.coverageCheckpointsCompleted ?? 0;
+    if (completed > previousCheckpointCount.current && "vibrate" in navigator) {
+      navigator.vibrate([35, 25, 65]);
+    }
+    previousCheckpointCount.current = completed;
+  }, [snapshot.captureId, snapshot.captureReadiness?.metrics.coverageCheckpointsCompleted]);
 
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
@@ -106,6 +120,10 @@ export function App() {
         <div className={`reticle ${qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
       ) : null}
 
+      {snapshot.captureId && snapshot.captureReadiness ? (
+        <CaptureGlobe report={snapshot.captureReadiness} pose={snapshot.pose} />
+      ) : null}
+
       <section className="capture-panel" aria-label="Capture controls">
         <p className="build-id">
           Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
@@ -132,9 +150,6 @@ export function App() {
             </strong>
           </div>
         </div>
-        {snapshot.captureId && snapshot.captureReadiness ? (
-          <CoverageStrip report={snapshot.captureReadiness} />
-        ) : null}
         <p className={`capture-instruction ${qualityClass(snapshot.captureQuality.lastDecision)}`}>
           {captureInstruction(snapshot)}
         </p>
@@ -473,21 +488,6 @@ function ReadinessPanel({ report }: { report: CaptureReadinessReport }) {
   );
 }
 
-function CoverageStrip({ report }: { report: CaptureReadinessReport }) {
-  const missing = new Set(report.metrics.missingAzimuthBins);
-  return (
-    <div className="coverage-strip" aria-label={`${report.metrics.azimuthBinsCovered} of ${report.metrics.azimuthBinCount} orbit sectors covered`}>
-      <span>orbit</span>
-      <div>
-        {Array.from({ length: report.metrics.azimuthBinCount }, (_, index) => (
-          <i key={index} className={missing.has(index) ? "" : "covered"} />
-        ))}
-      </div>
-      <strong>{report.metrics.azimuthBinsCovered}/{report.metrics.azimuthBinCount}</strong>
-    </div>
-  );
-}
-
 function readinessLabel(status: CaptureReadinessReport["status"]): string {
   if (status === "ready") return "READY FOR SFM";
   if (status === "add-views") return "ADD VIEWS";
@@ -540,7 +540,7 @@ function formatVisualProcessing(report: DiagnosticSnapshot["visualTracking"]) {
 }
 
 function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision"]) {
-  if (reason === "accepted") return "quality-good";
+  if (reason === "accepted" || reason === "checkpoint-burst") return "quality-good";
   if (reason === "waiting") return "";
   return "quality-warning";
 }
@@ -563,7 +563,8 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
   }
   switch (snapshot.captureQuality.lastDecision) {
     case "accepted":
-      return liveReadinessInstruction(snapshot.captureReadiness);
+    case "checkpoint-burst":
+      return checkpointInstruction(snapshot.captureReadiness);
     case "blur":
       return "HOLD STEADY OR MOVE FARTHER — the target is not sharp enough.";
     case "low-texture":
@@ -571,9 +572,11 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
     case "too-close":
       return `MOVE FARTHER — fixed-focus WebXR is unreliable below ${MINIMUM_TARGET_DISTANCE_CM} cm.`;
     case "motion":
-      return "SLOW DOWN — camera motion is too fast.";
+      return "MOVE TO THE NEXT SECTOR, THEN STOP — sharp frames are captured while stationary.";
     case "redundant":
-      return "MOVE TO A NEW VIEW — this angle is already covered.";
+      return currentCheckpointCaptured(snapshot.captureReadiness)
+        ? "SECTOR CAPTURED — move to the highlighted unlit sector."
+        : "HOLD STEADY — waiting for a sharp checkpoint burst.";
     case "tracking":
       return "TRACKING LOST — aim at a detailed, well-lit area.";
     case "image-unavailable":
@@ -582,6 +585,27 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
     default:
       return "Hold steady while the first frame is evaluated.";
   }
+}
+
+function checkpointInstruction(report?: CaptureReadinessReport): string {
+  const cell = currentCoverageCell(report);
+  if (!cell) return liveReadinessInstruction(report);
+  if (cell.state === "captured") {
+    return "SECTOR CAPTURED — move to the highlighted unlit sector.";
+  }
+  return `HOLD STEADY — sharp burst ${Math.min(cell.selectedFrameIds.length, 2)} / 2.`;
+}
+
+function currentCheckpointCaptured(report?: CaptureReadinessReport): boolean {
+  return currentCoverageCell(report)?.state === "captured";
+}
+
+function currentCoverageCell(report?: CaptureReadinessReport) {
+  const current = report?.metrics.currentCoverageCell;
+  if (!current) return undefined;
+  return report.metrics.coverageCells?.find(
+    (cell) => cell.azimuthBin === current.azimuthBin && cell.latitude === current.latitude,
+  );
 }
 
 function liveReadinessInstruction(report?: CaptureReadinessReport): string {

@@ -31,6 +31,7 @@ export interface FrameQuality {
 
 export type CaptureDecisionReason =
   | "accepted"
+  | "checkpoint-burst"
   | "tracking"
   | "image-unavailable"
   | "unsynchronized-image"
@@ -103,6 +104,19 @@ export type CaptureStatus = "incomplete" | "complete";
 
 export type CaptureReadinessStatus = "ready" | "add-views" | "capture-risk";
 
+export type CaptureCoverageLatitude = "low" | "level" | "raised" | "high";
+
+export interface CaptureCoverageCell {
+  azimuthBin: number;
+  latitude: CaptureCoverageLatitude;
+  required: boolean;
+  frameCount: number;
+  stableFrameCount: number;
+  bestSharpness: number;
+  selectedFrameIds: number[];
+  state: "empty" | "sampled" | "captured";
+}
+
 export type CaptureReadinessReasonCode =
   | "insufficient-frames"
   | "missing-images"
@@ -140,6 +154,13 @@ export interface CaptureReadinessReport {
     missingAzimuthBins: number[];
     elevationBandsCovered: Array<"low" | "level" | "high">;
     elevationSpanDegrees: number;
+    coverageCells?: CaptureCoverageCell[];
+    coverageCheckpointsCompleted?: number;
+    coverageCheckpointsRequired?: number;
+    currentCoverageCell?: {
+      azimuthBin: number;
+      latitude: CaptureCoverageLatitude;
+    };
     targetEstimate?: [number, number, number];
     visualConnectedFrames: number;
     visualComponentCount: number;

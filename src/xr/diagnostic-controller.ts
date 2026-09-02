@@ -5,6 +5,7 @@ import {
   QualityKeyframeSelector,
 } from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
+import { CheckpointBurstGate } from "../keyframes/checkpoint-burst";
 import { analyzeTargetImageQuality } from "../quality/sharpness";
 import { medianCenterDepth } from "../quality/focus-distance";
 import { IncrementalVisualTracker, unavailableReport } from "../refinement/visual-tracker";
@@ -50,6 +51,7 @@ interface ActiveCapture {
   metadata: CaptureMetadata;
   gate: TemporalKeyframeGate;
   selector?: QualityKeyframeSelector;
+  checkpointBurst?: CheckpointBurstGate;
   imuStartIndex: number;
   inFlight: boolean;
   stopping: boolean;
@@ -330,6 +332,7 @@ export class XRDiagnosticController {
       metadata,
       gate: new TemporalKeyframeGate(4),
       selector: captureMode === "object" ? new QualityKeyframeSelector() : undefined,
+      checkpointBurst: captureMode === "object" ? new CheckpointBurstGate() : undefined,
       imuStartIndex: this.imu.getSampleCount(),
       inFlight: false,
       stopping: false,
@@ -474,6 +477,7 @@ export class XRDiagnosticController {
         textureScore: image?.textureScore ?? 0,
         targetDistance: input.depth?.targetDistance,
       });
+      decision = active.checkpointBurst?.evaluate(decision) ?? decision;
       if (decision.accepted) decision.acceptedFrameId = active.frames;
       this.updateQualityTelemetry(decision);
       const rejectedPreview = decision.accepted || !image || candidateId % REJECTED_PREVIEW_INTERVAL !== 0

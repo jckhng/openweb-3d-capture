@@ -127,6 +127,30 @@ describe("capture readiness", () => {
     expect(report.metrics.azimuthBinsCovered).toBe(12);
     expect(report.status).toBe("ready");
   });
+
+  it("lights a globe checkpoint only after a stable two-frame burst", () => {
+    const frames = orbitFrames(4, () => ({ angle: 0, elevation: 0 })).map((frame, index) => ({
+      ...frame,
+      quality: {
+        ...frame.quality,
+        motionScore: index < 2 ? 0.9 : 0.2,
+      },
+    }));
+    const sampled = analyzeCaptureReadiness({ frames: frames.slice(0, 3), decisions: [] });
+    const captured = analyzeCaptureReadiness({ frames, decisions: [] });
+    const sampledCurrent = sampled.metrics.currentCoverageCell;
+    const current = captured.metrics.currentCoverageCell;
+    const sampledCell = sampled.metrics.coverageCells?.find(
+      (cell) => cell.azimuthBin === sampledCurrent?.azimuthBin && cell.latitude === sampledCurrent?.latitude,
+    );
+    const capturedCell = captured.metrics.coverageCells?.find(
+      (cell) => cell.azimuthBin === current?.azimuthBin && cell.latitude === current?.latitude,
+    );
+
+    expect(captured.metrics.coverageCheckpointsRequired).toBe(28);
+    expect(sampledCell).toMatchObject({ frameCount: 3, stableFrameCount: 1, state: "sampled" });
+    expect(capturedCell).toMatchObject({ frameCount: 4, stableFrameCount: 2, state: "captured" });
+  });
 });
 
 function orbitFrames(
