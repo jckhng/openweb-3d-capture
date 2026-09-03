@@ -117,7 +117,7 @@ export function invertNormalizedDepthMapping(matrix: number[][]) {
   };
 }
 
-function readDepthMeters(
+export function readDepthMeters(
   format: string | undefined,
   data: Uint8Array,
   index: number,

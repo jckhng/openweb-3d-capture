@@ -83,6 +83,7 @@ Implemented:
 * three-candidate post-motion settling window that saves one representative image per stable pause
 * checkpoint cells that remain incomplete until two sharp, low-motion object-relative viewpoints separated by at least 6° are retained
 * near-duplicate viewpoint clustering with hybrid-sharpness representative replacement and farthest-point selection capped at four representatives per cell
+* experimental local depth constellation inside the globe: sparse target-region depth is back-projected only for accepted viewpoints, voxel-bounded for phone rendering, and colored blue for new observations or orange for multi-view support; it is display-only and omitted when CPU depth is unavailable
 * readiness gate that cannot report ready while a required globe checkpoint remains incomplete
 * post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
@@ -100,7 +101,7 @@ Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (83 tests)
+npm test        PASS (85 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -196,6 +197,7 @@ Required before declaring M2 complete:
 6. Verify the 0.45 m distance gate against a printed high-frequency target at 0.25, 0.35, 0.45, and 0.60 m.
 7. Confirm the recalibrated blur and motion limits still allow a deliberate 50–100-frame orbit.
 8. Record the minimum object size that retains identifiable detail at the calibrated focus floor; constrain web v1 scope if necessary.
+9. Validate the experimental depth constellation on the target phone: measured points should follow the subject, repeated observations should turn orange, globe rotation should remain smooth, and four-FPS candidate cadence must not regress.
 
 Plan constraints clarified by implementation:
 

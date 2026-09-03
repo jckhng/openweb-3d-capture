@@ -25,11 +25,12 @@ The app does not upload capture data. Images, depth, poses, and diagnostics stay
 2. Move to the blue/highlighted cell, stop, and hold through the settling prompt. Do not continuously film the orbit.
 3. After **VIEWPOINT 1 / 2**, take a small sideways step while remaining in the cell, stop, and hold again. The app requires at least 6° of object-relative separation.
 4. Wait for haptic confirmation and an orange cell before advancing.
-5. Add the six low cells by physically lowering the phone and aiming slightly upward.
-6. Add the six raised cells from 35°–60° above the subject.
-7. Add the top cell from two separated positions above the object.
-8. Return near the starting viewpoint to close the visual loop.
-9. Finish only when all 25 required cells are orange and the result is **READY FOR SFM**.
+5. If CPU depth is available, confirm a blue surface constellation appears after the first accepted view, gains orange multi-view points after overlapping views, and rotates smoothly with the globe. Its absence on a depthless device is expected.
+6. Add the six low cells by physically lowering the phone and aiming slightly upward.
+7. Add the six raised cells from 35°–60° above the subject.
+8. Add the top cell from two separated positions above the object.
+9. Return near the starting viewpoint to close the visual loop.
+10. Finish only when all 25 required cells are orange and the result is **READY FOR SFM**.
 
 Coverage is based on camera position relative to the estimated object. Merely tilting the phone without moving it does not add the parallax required by reconstruction.
 

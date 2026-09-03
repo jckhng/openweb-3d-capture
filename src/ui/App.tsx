@@ -228,6 +228,7 @@ export function App() {
         <CaptureGlobe
           report={snapshot.captureReadiness}
           pose={snapshot.pose}
+          captureMap={snapshot.captureMap}
           framingLost={Boolean(snapshot.targetFraming && !snapshot.targetFraming.centered)}
         />
       ) : null}

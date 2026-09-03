@@ -1,9 +1,11 @@
+import { useEffect, useRef } from "react";
 import type {
   CaptureCoverageCell,
   CaptureCoverageLatitude,
   CaptureReadinessReport,
   Matrix4,
 } from "../shared/types";
+import type { CaptureMapSnapshot } from "../pointcloud/capture-map";
 
 const LONGITUDE_SECTORS = 12;
 const CENTER_X = 100;
@@ -26,10 +28,12 @@ const LATITUDES: ReadonlyArray<{
 export function CaptureGlobe({
   report,
   pose,
+  captureMap,
   framingLost = false,
 }: {
   report: CaptureReadinessReport;
   pose?: Matrix4;
+  captureMap?: CaptureMapSnapshot;
   framingLost?: boolean;
 }) {
   const cells = report.metrics.coverageCells ?? [];
@@ -54,48 +58,53 @@ export function CaptureGlobe({
 
   return (
     <aside className={`capture-globe${framingLost ? " capture-globe-framing-lost" : ""}`} aria-label={`${completed} of ${required} capture checkpoints complete`}>
-      <svg viewBox="0 0 200 180" role="img" aria-hidden="true">
-        <defs>
-          <radialGradient id="globe-glass" cx="38%" cy="30%" r="70%">
-            <stop offset="0" stopColor="#e0f2fe" stopOpacity="0.18" />
-            <stop offset="0.65" stopColor="#38bdf8" stopOpacity="0.08" />
-            <stop offset="1" stopColor="#020617" stopOpacity="0.2" />
-          </radialGradient>
-          <filter id="globe-glow" x="-60%" y="-60%" width="220%" height="220%">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-        </defs>
-        <circle cx={CENTER_X} cy={CENTER_Y} r={RADIUS} fill="url(#globe-glass)" className="globe-shell" />
-        {polygons.map(({ cell, points, depth }) => (
-          <polygon
-            key={`${cell.latitude}-${cell.azimuthBin}`}
-            points={points}
-            className={[
-              "globe-cell",
-              `globe-cell-${cell.state}`,
-              depth < 0 ? "globe-cell-back" : "globe-cell-front",
-              cell.required ? "globe-cell-required" : "globe-cell-optional",
-              liveCell && sameCell(cell, liveCell) ? "globe-cell-current" : "",
-              target && sameCell(cell, target) ? "globe-cell-target" : "",
-            ].filter(Boolean).join(" ")}
-          />
-        ))}
-        {[-20, 5, 35, 60, 90].map((latitude) => (
-          <polyline
-            key={latitude}
-            points={latitudeLine(latitude, orientation)}
-            className="globe-grid"
-          />
-        ))}
-        <circle cx={CENTER_X} cy={CENTER_Y} r={RADIUS} className="globe-outline" />
-        {liveCell ? (
-          <g className="globe-you" transform={`translate(${marker.x} ${marker.y})`} filter="url(#globe-glow)">
-            <circle r="5" />
-            <circle r="10" className="globe-you-ring" />
-          </g>
+      <div className="capture-globe-visual">
+        <svg viewBox="0 0 200 180" role="img" aria-hidden="true">
+          <defs>
+            <radialGradient id="globe-glass" cx="38%" cy="30%" r="70%">
+              <stop offset="0" stopColor="#e0f2fe" stopOpacity="0.18" />
+              <stop offset="0.65" stopColor="#38bdf8" stopOpacity="0.08" />
+              <stop offset="1" stopColor="#020617" stopOpacity="0.2" />
+            </radialGradient>
+            <filter id="globe-glow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="2.5" result="blur" />
+              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+            </filter>
+          </defs>
+          <circle cx={CENTER_X} cy={CENTER_Y} r={RADIUS} fill="url(#globe-glass)" className="globe-shell" />
+          {polygons.map(({ cell, points, depth }) => (
+            <polygon
+              key={`${cell.latitude}-${cell.azimuthBin}`}
+              points={points}
+              className={[
+                "globe-cell",
+                `globe-cell-${cell.state}`,
+                depth < 0 ? "globe-cell-back" : "globe-cell-front",
+                cell.required ? "globe-cell-required" : "globe-cell-optional",
+                liveCell && sameCell(cell, liveCell) ? "globe-cell-current" : "",
+                target && sameCell(cell, target) ? "globe-cell-target" : "",
+              ].filter(Boolean).join(" ")}
+            />
+          ))}
+          {[-20, 5, 35, 60, 90].map((latitude) => (
+            <polyline
+              key={latitude}
+              points={latitudeLine(latitude, orientation)}
+              className="globe-grid"
+            />
+          ))}
+          <circle cx={CENTER_X} cy={CENTER_Y} r={RADIUS} className="globe-outline" />
+          {liveCell ? (
+            <g className="globe-you" transform={`translate(${marker.x} ${marker.y})`} filter="url(#globe-glow)">
+              <circle r="5" />
+              <circle r="10" className="globe-you-ring" />
+            </g>
+          ) : null}
+        </svg>
+        {captureMap?.points.length ? (
+          <CaptureConstellation map={captureMap} orientation={orientation} />
         ) : null}
-      </svg>
+      </div>
       <div className="capture-globe-status">
         <strong>{completed}/{required}</strong>
         <span>{target ? `next: ${latitudeLabel(target.latitude)} sector` : "checkpoint coverage complete"}</span>
@@ -104,9 +113,77 @@ export function CaptureGlobe({
   );
 }
 
+function CaptureConstellation({
+  map,
+  orientation,
+}: {
+  map: CaptureMapSnapshot;
+  orientation: GlobeOrientation;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    const scale = canvas.width / 200;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.save();
+    context.scale(scale, scale);
+    context.beginPath();
+    context.arc(CENTER_X, CENTER_Y, RADIUS - 2, 0, Math.PI * 2);
+    context.clip();
+
+    const points = map.points.map((point) => ({
+      ...projectCapturePoint(point, orientation),
+      support: point.support,
+    })).sort((a, b) => a.depth - b.depth);
+    for (const point of points) {
+      const confirmed = point.support > 1;
+      const depthOpacity = 0.3 + 0.6 * ((point.depth + 1) / 2);
+      const radius = Math.min(3.1, confirmed ? 1.55 + Math.log2(point.support) * 0.42 : 1.15);
+      context.globalAlpha = depthOpacity;
+      context.shadowBlur = confirmed ? 5 : 3;
+      context.shadowColor = confirmed ? "#fb923c" : "#38bdf8";
+      context.fillStyle = confirmed ? "#fb923c" : "#7dd3fc";
+      context.beginPath();
+      context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+  }, [map, orientation]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="globe-constellation"
+      width="400"
+      height="360"
+      aria-hidden="true"
+    />
+  );
+}
+
 interface GlobeOrientation {
   longitude: number;
   elevation: number;
+}
+
+export function projectCapturePoint(
+  point: { x: number; y: number; z: number },
+  orientation: GlobeOrientation,
+) {
+  const yaw = orientation.longitude * Math.PI / 180;
+  const pitch = (orientation.elevation - DISPLAY_ELEVATION) * Math.PI / 180;
+  const rotatedX = point.x * Math.cos(yaw) - point.z * Math.sin(yaw);
+  const yawedZ = point.x * Math.sin(yaw) + point.z * Math.cos(yaw);
+  const rotatedY = point.y * Math.cos(pitch) - yawedZ * Math.sin(pitch);
+  const rotatedZ = point.y * Math.sin(pitch) + yawedZ * Math.cos(pitch);
+  const mapRadius = RADIUS * 0.82;
+  return {
+    x: CENTER_X + mapRadius * rotatedX,
+    y: CENTER_Y - mapRadius * rotatedY,
+    depth: Math.max(-1, Math.min(1, rotatedZ)),
+  };
 }
 
 function projectCell(cell: CaptureCoverageCell, orientation: GlobeOrientation) {

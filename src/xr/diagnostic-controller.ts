@@ -15,6 +15,10 @@ import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
 import { StableViewpointGate } from "../keyframes/stable-viewpoint-gate";
 import { analyzeTargetImageQuality } from "../quality/sharpness";
 import { medianCenterDepth } from "../quality/focus-distance";
+import {
+  CaptureMapAccumulator,
+  type CaptureMapSnapshot,
+} from "../pointcloud/capture-map";
 import { IncrementalVisualTracker, unavailableReport } from "../refinement/visual-tracker";
 import { deriveIntrinsics, fromWebXRTransform } from "../shared/matrix";
 import { BUILD_TIMESTAMP } from "../shared/build";
@@ -69,6 +73,7 @@ interface ActiveCapture {
   pendingWrite?: Promise<void>;
   readinessFrames: CaptureFrame[];
   readinessDecisions: CaptureDecision[];
+  captureMap?: CaptureMapAccumulator;
 }
 
 interface CandidateFrameInput {
@@ -128,6 +133,7 @@ export interface DiagnosticSnapshot {
   depthScale?: number;
   targetDistance?: number;
   targetFraming?: TargetFraming;
+  captureMap?: CaptureMapSnapshot;
   imuSampleRate: number;
   imuStatus: string;
   captureId?: string;
@@ -229,6 +235,9 @@ export class XRDiagnosticController {
       depthResolution: this.snapshot.depthResolution ? { ...this.snapshot.depthResolution } : undefined,
       targetFraming: this.snapshot.targetFraming
         ? { ...this.snapshot.targetFraming, ndc: [...this.snapshot.targetFraming.ndc] }
+        : undefined,
+      captureMap: this.snapshot.captureMap
+        ? { ...this.snapshot.captureMap, points: this.snapshot.captureMap.points.map((point) => ({ ...point })) }
         : undefined,
     };
   }
@@ -377,12 +386,16 @@ export class XRDiagnosticController {
       stopping: false,
       readinessFrames: [],
       readinessDecisions: [],
+      captureMap: targetLock
+        ? new CaptureMapAccumulator(targetLock.worldPoint, targetLock.distanceMeters)
+        : undefined,
     };
     this.snapshot.captureId = metadata.captureId;
     this.snapshot.captureMode = captureMode;
     this.snapshot.captureProgress = { current: 0, target };
     this.snapshot.captureQuality = createQualityTelemetry();
     this.snapshot.captureReadiness = undefined;
+    this.snapshot.captureMap = undefined;
     this.snapshot.lastReadiness = undefined;
     this.snapshot.captureFinalization = undefined;
     this.snapshot.targetFraming = targetLock && this.snapshot.pose && this.snapshot.projectionMatrix
@@ -608,6 +621,7 @@ export class XRDiagnosticController {
 
     await this.persistence.appendFrame(active.id, frame, image?.blob, input.depth?.blob);
     active.readinessFrames.push(structuredClone(frame));
+    await this.updateCaptureMap(active, id, input);
     if (active.selector && image?.source === "xr-camera") {
       this.visualTracker.track({
         id,
@@ -639,6 +653,37 @@ export class XRDiagnosticController {
       await this.finalizeActiveCapture(active, "complete");
     }
     this.emit();
+  }
+
+  private async updateCaptureMap(
+    active: ActiveCapture,
+    frameId: number,
+    input: CandidateFrameInput,
+  ): Promise<void> {
+    const map = active.captureMap;
+    const depth = input.depth;
+    const intrinsics = input.intrinsics;
+    if (!map || !depth?.blob || !intrinsics) return;
+    try {
+      map.ingest({
+        frameId,
+        cameraToWorld: input.cameraToWorld,
+        intrinsics,
+        viewWidth: input.width,
+        viewHeight: input.height,
+        depthWidth: depth.width,
+        depthHeight: depth.height,
+        depthRawValueToMeters: depth.rawValueToMeters,
+        depthDataFormat: depth.dataFormat,
+        normDepthBufferFromNormView: depth.normDepthBufferFromNormView,
+        depth: new Uint8Array(await depth.blob.arrayBuffer()),
+        targetNdc: input.targetFraming?.ndc,
+        targetDistance: depth.targetDistance,
+      });
+      this.snapshot.captureMap = map.snapshot();
+    } catch {
+      // The constellation is informational. Depth-map quirks must never block capture.
+    }
   }
 
   private updateQualityTelemetry(decision: CaptureDecision): void {
@@ -992,6 +1037,7 @@ export class XRDiagnosticController {
     this.snapshot.captureReadiness = undefined;
     this.snapshot.captureFinalization = "saved";
     this.snapshot.targetFraming = undefined;
+    this.snapshot.captureMap = undefined;
     this.emit();
   }
 
