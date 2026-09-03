@@ -22,13 +22,14 @@ The app does not upload capture data. Images, depth, poses, and diagnostics stay
 ## Capture protocol
 
 1. Use the 12-sector **standard** ring for the main orbit. It represents the camera 5°–35° above the object, the natural position when a phone is held above the object and aimed slightly down.
-2. Move to the blue/highlighted cell, stop, and hold. Do not continuously film the orbit.
-3. Wait for two sharp frames, haptic confirmation, and an orange cell before moving.
-4. Add the six low views by physically lowering the phone and aiming slightly upward.
-5. Add the six raised views from 35°–60° above the subject.
-6. Add one top view from above. Rotating around the same top position is unnecessary.
-7. Return near the starting viewpoint to close the visual loop.
-8. Finish only when all 25 required cells are orange and the result is **READY FOR SFM**.
+2. Move to the blue/highlighted cell, stop, and hold through the settling prompt. Do not continuously film the orbit.
+3. After **VIEWPOINT 1 / 2**, take a small sideways step while remaining in the cell, stop, and hold again. The app requires at least 6° of object-relative separation.
+4. Wait for haptic confirmation and an orange cell before advancing.
+5. Add the six low cells by physically lowering the phone and aiming slightly upward.
+6. Add the six raised cells from 35°–60° above the subject.
+7. Add the top cell from two separated positions above the object.
+8. Return near the starting viewpoint to close the visual loop.
+9. Finish only when all 25 required cells are orange and the result is **READY FOR SFM**.
 
 Coverage is based on camera position relative to the estimated object. Merely tilting the phone without moving it does not add the parallax required by reconstruction.
 

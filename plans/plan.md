@@ -80,25 +80,27 @@ Implemented:
 * live WebXR azimuth/elevation globe orientation with a three-quarter top-down presentation and visible reverse-side cells
 * light-blue uncaptured, blue active, and orange completed checkpoint states
 * explicit move → hold → confirm → advance capture phases, separating navigation from sharp image acquisition
-* bounded two-frame stationary bursts admitted after each novel viewpoint, with haptic and visual completion confirmation
-* checkpoint cells that remain incomplete until two sharp, low-motion reconstruction images are retained
+* three-candidate post-motion settling window that saves one representative image per stable pause
+* checkpoint cells that remain incomplete until two sharp, low-motion object-relative viewpoints separated by at least 6° are retained
+* near-duplicate viewpoint clustering with hybrid-sharpness representative replacement and farthest-point selection capped at four representatives per cell
 * readiness gate that cannot report ready while a required globe checkpoint remains incomplete
 * post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
 * destination packages that retain WebXR provenance without root pose/reconstruction markers
-* per-cell capture admission capped at ten images; destination sampling capped at four images with motion score at most 0.4 and attributed hybrid sharpness ranking; complete and sufficiently distributed incomplete captures remain bounded, while sparse captures fall back to all images
+* per-cell capture admission and destination sampling capped at four spatially distinct representatives with motion score at most 0.4 and attributed hybrid sharpness ranking; complete and sufficiently distributed incomplete captures remain bounded, while sparse captures fall back to all images
 * explicit UI and handoff-file warnings when Spirula/LichtFeld export is requested below the direct-SfM readiness threshold
 * explicit camera-open step followed by a separate user-triggered capture start
 * save-before-deferred finalization: capture metadata, images, and preliminary readiness become durable before long visual repair begins
 * extracted-directory and ZIP dataset validator with Nerfstudio, image, pose, depth, PLY, and tracking checks
 * informational centered target-region feature and geometric-inlier telemetry
 * initial shadow-score replay on three retained phone captures: production-to-hybrid Spearman rank correlations of 0.41, 0.41, and 0.68; the metrics disagree enough to justify evaluation but not enough to replace the production gate without labeled blur and reconstruction evidence
+* distinct-viewpoint replay on `capture-1788423166798-qalrhh`: 123 accepted frames collapse to 24 object-relative representatives; previously bundled cells with less than 6° separation correctly remain sampled instead of appearing complete
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (81 tests)
+npm test        PASS (83 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -1026,7 +1028,7 @@ Wider-rollout bound:
 2. validate the shifted standard ring, continuous three-quarter globe, colors, move/hold/confirm timing, haptics, wake lock, and save-before-analysis behavior on at least three ARCore devices
 3. reconstruct each checkpoint-selected image set through Spirula native SfM and LichtFeld `community:colmap`; record registration rate, blur, reconstruction quality, and handoff time
 4. collect the copyable tester report plus the private canonical ZIP for failures; do not publish raw captures because backgrounds may contain private information
-5. tune the two-frame burst, low-motion limit, elevation boundaries, and 50-image gate only from multi-device evidence
+5. tune the three-candidate settling window, 6° viewpoint separation, low-motion limit, elevation boundaries, and 50-viewpoint gate only from multi-device evidence
 6. compare production and Sharp Frames hybrid rankings against human blur labels and COLMAP registration; only then consider using the hybrid score for per-sector ranking
 7. add representative checkpoint thumbnails only if testers cannot relocate weak sectors from the globe
 8. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
@@ -1057,7 +1059,7 @@ MOVE to highlighted checkpoint
     ↓
 STOP and hold steady
     ↓
-capture a bounded sharp burst
+wait through the settling window and save one sharp viewpoint
     ↓
 CONFIRM cell with light + haptic
     ↓
@@ -1091,7 +1093,7 @@ sampled
 captured
 ```
 
-`captured` requires two retained images below the stationary-motion limit and above the sharpness floor. A moving pose may update navigation but must not complete a cell.
+`captured` requires two retained viewpoints at least 6° apart, below the stationary-motion limit, and above the sharpness floor. Repeated frames from one stop collapse into a single representative. A moving pose may update navigation but must not complete a cell.
 
 ---
 

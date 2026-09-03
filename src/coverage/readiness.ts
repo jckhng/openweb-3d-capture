@@ -19,8 +19,9 @@ const MINIMUM_ELEVATION_SPAN_DEGREES = 20;
 const MINIMUM_FRAMES_FOR_VISUAL_CHECK = 12;
 const MAXIMUM_LOOP_ROTATION_RADIANS = 25 * Math.PI / 180;
 const MAXIMUM_CHECKPOINT_MOTION_SCORE = 0.55;
-const CHECKPOINT_BURST_SAMPLES = 2;
-export const MAXIMUM_SELECTED_FRAMES_PER_CELL = 10;
+const CHECKPOINT_DISTINCT_VIEWPOINTS = 2;
+export const MINIMUM_VIEWPOINT_SEPARATION_DEGREES = 6;
+export const MAXIMUM_SELECTED_FRAMES_PER_CELL = 4;
 
 const COVERAGE_LATITUDE_BANDS: ReadonlyArray<{
   latitude: CaptureCoverageLatitude;
@@ -364,12 +365,12 @@ function analyzeCoverage(
     }
   }
   for (const cell of cells) {
-    cell.selectedFrameIds = [...(stableCandidates.get(`${cell.latitude}:${cell.azimuthBin}`) ?? [])]
-      .sort((left, right) => frameSharpness(right) - frameSharpness(left))
-      .filter((frame) => frameSharpness(frame) >= MINIMUM_SHARPNESS)
-      .slice(0, MAXIMUM_SELECTED_FRAMES_PER_CELL)
+    cell.selectedFrameIds = selectViewpointRepresentatives(
+      stableCandidates.get(`${cell.latitude}:${cell.azimuthBin}`) ?? [],
+      target,
+    )
       .map((frame) => frame.id);
-    cell.state = cell.selectedFrameIds.length >= CHECKPOINT_BURST_SAMPLES
+    cell.state = cell.selectedFrameIds.length >= CHECKPOINT_DISTINCT_VIEWPOINTS
       ? "captured"
       : cell.frameCount > 0
         ? "sampled"
@@ -387,6 +388,77 @@ function analyzeCoverage(
     cells,
     currentCell,
   };
+}
+
+export function selectViewpointRepresentatives(
+  frames: readonly CaptureFrame[],
+  target: [number, number, number],
+  maximum = MAXIMUM_SELECTED_FRAMES_PER_CELL,
+): CaptureFrame[] {
+  const remaining = frames
+    .filter((frame) => frameSharpness(frame) >= MINIMUM_SHARPNESS)
+    .flatMap((frame) => {
+      const direction = viewpointDirection(frame.cameraToWorld, target);
+      return direction ? [{ frame, direction }] : [];
+    })
+    .sort((left, right) => compareRepresentativeQuality(left.frame, right.frame));
+  if (!remaining.length) return [];
+  const selected = [remaining.shift()!];
+  while (selected.length < maximum) {
+    const eligible = remaining.flatMap((candidate, index) => {
+      const nearest = Math.min(...selected.map((chosen) => (
+        vectorAngleDegrees(candidate.direction, chosen.direction)
+      )));
+      return nearest >= MINIMUM_VIEWPOINT_SEPARATION_DEGREES
+        ? [{ candidate, index, nearest }]
+        : [];
+    });
+    if (!eligible.length) break;
+    eligible.sort((left, right) => right.nearest - left.nearest ||
+      compareRepresentativeQuality(left.candidate.frame, right.candidate.frame));
+    const [{ candidate, index }] = eligible;
+    selected.push(candidate);
+    remaining.splice(index, 1);
+  }
+  return selected.map((candidate) => candidate.frame).sort((left, right) => left.id - right.id);
+}
+
+function viewpointDirection(
+  cameraToWorld: Matrix4,
+  target: [number, number, number],
+): [number, number, number] | undefined {
+  const delta = subtract(translationOf(cameraToWorld), target);
+  const length = Math.hypot(...delta);
+  if (!(length > 0.05)) return undefined;
+  return [delta[0] / length, delta[1] / length, delta[2] / length];
+}
+
+function vectorAngleDegrees(left: readonly number[], right: readonly number[]): number {
+  return Math.acos(Math.max(-1, Math.min(1, dot(left, right)))) * 180 / Math.PI;
+}
+
+export function viewpointSeparationDegrees(
+  left: Matrix4,
+  right: Matrix4,
+  target: [number, number, number],
+): number {
+  const leftDirection = viewpointDirection(left, target);
+  const rightDirection = viewpointDirection(right, target);
+  return leftDirection && rightDirection
+    ? vectorAngleDegrees(leftDirection, rightDirection)
+    : 0;
+}
+
+function compareRepresentativeQuality(left: CaptureFrame, right: CaptureFrame): number {
+  const leftHybrid = left.quality.sharpFramesHybridScore;
+  const rightHybrid = right.quality.sharpFramesHybridScore;
+  if (Number.isFinite(leftHybrid) && Number.isFinite(rightHybrid) && leftHybrid !== rightHybrid) {
+    return rightHybrid! - leftHybrid!;
+  }
+  const sharpness = frameSharpness(right) - frameSharpness(left);
+  if (sharpness !== 0) return sharpness;
+  const motion = left.quality.motionScore - right.quality.motionScore;
+  return motion !== 0 ? motion : left.id - right.id;
 }
 
 export function locateCoverageCell(

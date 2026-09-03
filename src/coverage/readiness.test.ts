@@ -28,7 +28,7 @@ describe("capture readiness", () => {
       loopClosureDetected: true,
       physicalLoopClosed: false,
     });
-    expect(report.metrics.elevationSpanDegrees).toBeCloseTo(75, 5);
+    expect(report.metrics.elevationSpanDegrees).toBeCloseTo(83, 5);
     expect(summarizeCaptureReadiness(report)).toEqual({
       status: "ready",
       primaryAction: report.primaryAction,
@@ -122,16 +122,23 @@ describe("capture readiness", () => {
     expect(report.status).toBe("ready");
   });
 
-  it("lights a globe checkpoint only after a stable two-frame burst", () => {
-    const frames = orbitFrames(4, () => ({ angle: 0, elevation: 20 })).map((frame, index) => ({
+  it("lights a globe checkpoint only after two distinct stable viewpoints", () => {
+    const frames = orbitFrames(4, (index) => ({
+      angle: index === 3 ? 7 * Math.PI / 180 : 0,
+      elevation: 20,
+    })).map((frame, index) => ({
       ...frame,
       quality: {
         ...frame.quality,
         motionScore: index < 2 ? 0.9 : 0.2,
       },
     }));
-    const sampled = analyzeCaptureReadiness({ frames: frames.slice(0, 3), decisions: [] });
-    const captured = analyzeCaptureReadiness({ frames, decisions: [] });
+    const sampled = analyzeCaptureReadiness({
+      frames: frames.slice(0, 3), decisions: [], targetEstimate: [0, 0, 0],
+    });
+    const captured = analyzeCaptureReadiness({
+      frames, decisions: [], targetEstimate: [0, 0, 0],
+    });
     const sampledCurrent = sampled.metrics.currentCoverageCell;
     const current = captured.metrics.currentCoverageCell;
     const sampledCell = sampled.metrics.coverageCells?.find(
@@ -146,8 +153,11 @@ describe("capture readiness", () => {
     expect(capturedCell).toMatchObject({ frameCount: 4, stableFrameCount: 2, state: "captured" });
   });
 
-  it("retains at most the ten sharpest stationary images in a coverage cell", () => {
-    const frames = orbitFrames(12, () => ({ angle: 0, elevation: 20 })).map((frame, index) => ({
+  it("collapses near-duplicates and retains at most four diverse representatives per cell", () => {
+    const frames = orbitFrames(12, (index) => ({
+      angle: (index % 5) * 7 * Math.PI / 180,
+      elevation: 20,
+    })).map((frame, index) => ({
       ...frame,
       quality: {
         ...frame.quality,
@@ -155,14 +165,14 @@ describe("capture readiness", () => {
         motionScore: 0.2,
       },
     }));
-    const report = analyzeCaptureReadiness({ frames, decisions: [] });
+    const report = analyzeCaptureReadiness({ frames, decisions: [], targetEstimate: [0, 0, 0] });
     const current = report.metrics.currentCoverageCell;
     const cell = report.metrics.coverageCells?.find(
       (candidate) => candidate.azimuthBin === current?.azimuthBin && candidate.latitude === current?.latitude,
     );
 
-    expect(cell?.selectedFrameIds).toHaveLength(10);
-    expect(cell?.selectedFrameIds).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(cell?.selectedFrameIds).toHaveLength(4);
+    expect(cell?.selectedFrameIds).toEqual([0, 1, 2, 4]);
   });
 
   it("treats the top layer as one azimuth-independent checkpoint", () => {
@@ -203,9 +213,10 @@ function completeCoverageFrames(): CaptureFrame[] {
     ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, elevation: -10 })),
   ];
   return checkpoints.flatMap(({ azimuthBin, elevation }) => (
-    orbitFrames(2, () => ({
-      angle: -Math.PI + (azimuthBin + 0.5) * 2 * Math.PI / 12,
-      elevation,
+    orbitFrames(2, (index) => ({
+      angle: -Math.PI + (azimuthBin + 0.5) * 2 * Math.PI / 12 +
+        (index === 0 ? -4 : 4) * Math.PI / 180,
+      elevation: elevation + (index === 0 ? -4 : 4),
     }))
   )).map((frame, id) => ({
     ...frame,

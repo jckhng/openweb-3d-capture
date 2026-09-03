@@ -3,14 +3,16 @@ import {
   analyzeCaptureReadiness,
   locateCoverageCell,
   MAXIMUM_SELECTED_FRAMES_PER_CELL,
+  MINIMUM_VIEWPOINT_SEPARATION_DEGREES,
   summarizeCaptureReadiness,
+  viewpointSeparationDegrees,
 } from "../coverage/readiness";
 import {
   DEFAULT_QUALITY_SELECTOR_CONFIG,
   QualityKeyframeSelector,
 } from "../keyframes/quality-selector";
 import { TemporalKeyframeGate } from "../keyframes/temporal-gate";
-import { CheckpointBurstGate } from "../keyframes/checkpoint-burst";
+import { StableViewpointGate } from "../keyframes/stable-viewpoint-gate";
 import { analyzeTargetImageQuality } from "../quality/sharpness";
 import { medianCenterDepth } from "../quality/focus-distance";
 import { IncrementalVisualTracker, unavailableReport } from "../refinement/visual-tracker";
@@ -59,7 +61,7 @@ interface ActiveCapture {
   metadata: CaptureMetadata;
   gate: TemporalKeyframeGate;
   selector?: QualityKeyframeSelector;
-  checkpointBurst?: CheckpointBurstGate;
+  stableViewpoint?: StableViewpointGate;
   imuStartIndex: number;
   inFlight: boolean;
   stopping: boolean;
@@ -99,6 +101,7 @@ export interface CaptureQualityTelemetry {
   rejectedImage: number;
   rejectedTooClose: number;
   rejectedOffTarget: number;
+  rejectedSettling: number;
   sharpnessScore: number;
   sharpFramesHybridScore: number;
   sharpnessThreshold: number;
@@ -368,7 +371,7 @@ export class XRDiagnosticController {
       metadata,
       gate: new TemporalKeyframeGate(4),
       selector: captureMode === "object" ? new QualityKeyframeSelector() : undefined,
-      checkpointBurst: captureMode === "object" ? new CheckpointBurstGate() : undefined,
+      stableViewpoint: captureMode === "object" ? new StableViewpointGate() : undefined,
       imuStartIndex: this.imu.getSampleCount(),
       inFlight: false,
       stopping: false,
@@ -543,7 +546,8 @@ export class XRDiagnosticController {
         targetNdc: input.targetFraming?.ndc,
         targetInFront: input.targetFraming?.inFront,
       });
-      decision = active.checkpointBurst?.evaluate(decision) ?? decision;
+      decision = active.stableViewpoint?.evaluate(decision) ?? decision;
+      decision = this.enforceCoverageViewpointSeparation(decision);
       decision = this.enforceCoverageCellLimit(decision);
       if (decision.accepted) decision.acceptedFrameId = active.frames;
       this.updateQualityTelemetry(decision);
@@ -655,10 +659,15 @@ export class XRDiagnosticController {
     telemetry.rejected += 1;
     if (decision.reason === "blur") telemetry.rejectedBlur += 1;
     else if (decision.reason === "off-target") telemetry.rejectedOffTarget += 1;
+    else if (decision.reason === "settling") telemetry.rejectedSettling += 1;
     else if (decision.reason === "low-texture") telemetry.rejectedLowTexture += 1;
     else if (decision.reason === "too-close") telemetry.rejectedTooClose += 1;
     else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
-    else if (decision.reason === "redundant" || decision.reason === "sector-full") {
+    else if (
+      decision.reason === "redundant" ||
+      decision.reason === "viewpoint-too-close" ||
+      decision.reason === "sector-full"
+    ) {
       telemetry.rejectedRedundant += 1;
     }
     else if (decision.reason === "tracking") telemetry.rejectedTracking += 1;
@@ -678,6 +687,30 @@ export class XRDiagnosticController {
     );
     if (!cell || cell.selectedFrameIds.length < MAXIMUM_SELECTED_FRAMES_PER_CELL) return decision;
     return { ...decision, accepted: false, reason: "sector-full" };
+  }
+
+  private enforceCoverageViewpointSeparation(decision: CaptureDecision): CaptureDecision {
+    if (!decision.accepted) return decision;
+    const active = this.activeCapture;
+    const readiness = this.snapshot.captureReadiness;
+    const target = active?.targetPoint;
+    if (!active || !readiness || !target) return decision;
+    const location = locateCoverageCell(decision.cameraToWorld, target);
+    if (!location) return decision;
+    const cell = readiness.metrics.coverageCells?.find(
+      (candidate) => candidate.azimuthBin === location.azimuthBin &&
+        candidate.latitude === location.latitude,
+    );
+    if (!cell?.selectedFrameIds.length) return decision;
+    const representatives = active.readinessFrames.filter((frame) => (
+      cell.selectedFrameIds.includes(frame.id)
+    ));
+    const nearest = Math.min(...representatives.map((frame) => (
+      viewpointSeparationDegrees(decision.cameraToWorld, frame.cameraToWorld, target)
+    )));
+    return nearest >= MINIMUM_VIEWPOINT_SEPARATION_DEGREES
+      ? decision
+      : { ...decision, accepted: false, reason: "viewpoint-too-close" };
   }
 
   private readDepth(frame: XRFrame, view: XRView): DepthCapture | null {
@@ -1015,6 +1048,7 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
     rejectedImage: 0,
     rejectedTooClose: 0,
     rejectedOffTarget: 0,
+    rejectedSettling: 0,
     sharpnessScore: 0,
     sharpFramesHybridScore: 0,
     sharpnessThreshold: DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness,

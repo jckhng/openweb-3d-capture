@@ -295,7 +295,7 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
       sourceImageCount: dataset.images.size,
       selectedImageCount: requiredSelectedIds.length,
       selectedFrameIds: requiredSelectedIds,
-      reason: "Selected up to four hybrid-ranked images with motion score at most 0.4 per required checkpoint with complete coverage.",
+      reason: "Selected up to four spatially distinct, hybrid-ranked images with motion score at most 0.4 per required checkpoint with complete coverage.",
     };
   }
   const boundedSelectedIds = selectedIds(cells, availableFrameIds, dataset.frames);
@@ -309,7 +309,7 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
       sourceImageCount: dataset.images.size,
       selectedImageCount: boundedSelectedIds.length,
       selectedFrameIds: boundedSelectedIds,
-      reason: `Coverage is incomplete; selected up to four hybrid-ranked images with motion score at most 0.4 per populated sector across ${boundedAzimuthBins} azimuth bins.`,
+      reason: `Coverage is incomplete; selected up to four spatially distinct, hybrid-ranked images with motion score at most 0.4 per populated sector across ${boundedAzimuthBins} azimuth bins.`,
     };
   }
   const allFrameIds = dataset.frames

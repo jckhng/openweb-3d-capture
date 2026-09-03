@@ -408,6 +408,7 @@ export function App() {
           <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
           <Metric label="rejected too close" value={snapshot.captureQuality.rejectedTooClose} />
           <Metric label="rejected off target" value={snapshot.captureQuality.rejectedOffTarget} />
+          <Metric label="settling candidates" value={snapshot.captureQuality.rejectedSettling} />
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
           <Metric
             label="Sharp Frames shadow score"
@@ -794,12 +795,16 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
       return `MOVE FARTHER — fixed-focus WebXR is unreliable below ${MINIMUM_TARGET_DISTANCE_CM} cm.`;
     case "off-target":
       return "RE-CENTER OBJECT — capture is paused.";
+    case "settling":
+      return "HOLD STEADY — locking this viewpoint.";
+    case "viewpoint-too-close":
+      return "VIEWPOINT SAVED — take a wider sideways step within this sector, then stop.";
     case "motion":
       return "MOVE TO THE NEXT SECTOR, THEN STOP — sharp frames are captured while stationary.";
     case "redundant":
       return currentCheckpointCaptured(snapshot.captureReadiness)
         ? "SECTOR CAPTURED — move to the highlighted unlit sector."
-        : "HOLD STEADY — waiting for a sharp checkpoint burst.";
+        : "VIEWPOINT SAVED — take a small sideways step within this sector, then stop again.";
     case "sector-full":
       return "SECTOR FULL — move to the highlighted sector.";
     case "tracking":
@@ -824,7 +829,10 @@ function checkpointInstruction(report?: CaptureReadinessReport): string {
   if (cell.state === "captured") {
     return "SECTOR CAPTURED — move to the highlighted unlit sector.";
   }
-  return `HOLD STEADY — sharp burst ${Math.min(cell.selectedFrameIds.length, 2)} / 2.`;
+  if (cell.selectedFrameIds.length === 1) {
+    return "VIEWPOINT 1 / 2 — take a small sideways step within this sector, then stop.";
+  }
+  return "HOLD STEADY — capturing viewpoint 1 / 2.";
 }
 
 function currentCheckpointCaptured(report?: CaptureReadinessReport): boolean {

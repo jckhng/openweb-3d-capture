@@ -39,6 +39,8 @@ export type CaptureDecisionReason =
   | "image-unavailable"
   | "unsynchronized-image"
   | "off-target"
+  | "settling"
+  | "viewpoint-too-close"
   | "too-close"
   | "low-texture"
   | "blur"
