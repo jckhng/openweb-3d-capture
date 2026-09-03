@@ -375,6 +375,10 @@ export function App() {
           <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
           <Metric label="rejected too close" value={snapshot.captureQuality.rejectedTooClose} />
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
+          <Metric
+            label="Sharp Frames shadow score"
+            value={snapshot.captureQuality.sharpFramesHybridScore.toFixed(1)}
+          />
           <Metric label="sharpness threshold" value={formatPercent(snapshot.captureQuality.sharpnessThreshold)} />
           <Metric label="texture" value={formatPercent(snapshot.captureQuality.textureScore)} />
           <Metric label="motion score" value={formatPercent(snapshot.captureQuality.motionScore)} />
@@ -539,6 +543,10 @@ export function App() {
           </button>
         </div>
       </section>
+
+      <footer className="app-footer">
+        <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">Third-party notices</a>
+      </footer>
     </main>
   );
 }

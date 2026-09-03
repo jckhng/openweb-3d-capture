@@ -53,6 +53,8 @@ section {
 .rollout-status > div { padding: 0.65rem; border: 1px solid #26344a; border-radius: 0.55rem; background: #0b1220; }
 .storage-warning { margin: 0.75rem 0 0; color: #fde68a; }
 .tester-panel p { color: #cbd5e1; line-height: 1.45; }
+.app-footer { margin-top: 1rem; text-align: center; }
+.app-footer a { color: #7dd3fc; font-size: 0.8rem; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
 .capture-panel { border-color: #075985; background: linear-gradient(150deg, #111827 30%, #082f49); }
@@ -120,6 +122,7 @@ main.xr-active .diagnostic-controls,
 main.xr-active .readiness-panel,
 main.xr-active .onboarding,
 main.xr-active .tester-panel,
+main.xr-active .app-footer,
 main.xr-active > .notice { display: none; }
 
 main.xr-active .reticle {

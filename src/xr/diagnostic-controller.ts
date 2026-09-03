@@ -89,6 +89,7 @@ export interface CaptureQualityTelemetry {
   rejectedImage: number;
   rejectedTooClose: number;
   sharpnessScore: number;
+  sharpFramesHybridScore: number;
   sharpnessThreshold: number;
   textureScore: number;
   motionScore: number;
@@ -497,6 +498,7 @@ export class XRDiagnosticController {
         imageAvailable: Boolean(image),
         imageSynchronized: image?.source === "xr-camera",
         sharpnessScore: image?.sharpnessScore ?? 0,
+        sharpFramesHybridScore: image?.sharpFramesHybridScore,
         textureScore: image?.textureScore ?? 0,
         targetDistance: input.depth?.targetDistance,
       });
@@ -598,6 +600,7 @@ export class XRDiagnosticController {
     const telemetry = this.snapshot.captureQuality;
     telemetry.candidates += 1;
     telemetry.sharpnessScore = decision.sharpnessScore;
+    telemetry.sharpFramesHybridScore = decision.sharpFramesHybridScore ?? 0;
     telemetry.sharpnessThreshold = decision.sharpnessThreshold ?? DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness;
     telemetry.textureScore = decision.textureScore ?? 0;
     telemetry.motionScore = decision.quality.motionScore;
@@ -727,9 +730,9 @@ export class XRDiagnosticController {
     source: CanvasImageSource,
     width: number,
     height: number,
-  ): { sharpnessScore: number; textureScore: number } {
+  ): { sharpnessScore: number; textureScore: number; sharpFramesHybridScore: number } {
     const context = this.qualityCanvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return { sharpnessScore: 0, textureScore: 0 };
+    if (!context) return { sharpnessScore: 0, textureScore: 0, sharpFramesHybridScore: 0 };
     const cropSize = Math.max(1, Math.floor(Math.min(width, height) * 0.6));
     const sourceX = Math.floor((width - cropSize) / 2);
     const sourceY = Math.floor((height - cropSize) / 2);
@@ -940,6 +943,7 @@ interface CapturedImage {
   height: number;
   source: "xr-camera" | "media-stream";
   sharpnessScore: number;
+  sharpFramesHybridScore: number;
   textureScore: number;
 }
 
@@ -959,6 +963,7 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
     rejectedImage: 0,
     rejectedTooClose: 0,
     sharpnessScore: 0,
+    sharpFramesHybridScore: 0,
     sharpnessThreshold: DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness,
     textureScore: 0,
     motionScore: 0,

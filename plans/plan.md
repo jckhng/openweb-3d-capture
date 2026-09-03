@@ -32,6 +32,8 @@ Implemented:
 * network-first production service worker with offline fallback
 * compact immersive capture HUD that leaves the camera view unobstructed
 * 3×3 target-region Laplacian sharpness scoring with separate texture confidence
+* attributed Sharp Frames denoised Laplacian–Tenengrad target-tile shadow metric, persisted per candidate without changing the production acceptance gate
+* desktop quality analysis reporting both score distributions and their rank correlation
 * pose-derived linear/angular motion scoring
 * translation/rotation novelty selection
 * explicit rejection reasons and live quality guidance
@@ -87,6 +89,7 @@ Implemented:
 * save-before-deferred finalization: capture metadata, images, and preliminary readiness become durable before long visual repair begins
 * extracted-directory and ZIP dataset validator with Nerfstudio, image, pose, depth, PLY, and tracking checks
 * informational centered target-region feature and geometric-inlier telemetry
+* initial shadow-score replay on three retained phone captures: production-to-hybrid Spearman rank correlations of 0.41, 0.41, and 0.68; the metrics disagree enough to justify evaluation but not enough to replace the production gate without labeled blur and reconstruction evidence
 
 Local verification:
 
@@ -1021,8 +1024,9 @@ Wider-rollout bound:
 3. reconstruct each checkpoint-selected image set through Spirula native SfM and LichtFeld `community:colmap`; record registration rate, blur, reconstruction quality, and handoff time
 4. collect the copyable tester report plus the private canonical ZIP for failures; do not publish raw captures because backgrounds may contain private information
 5. tune the two-frame burst, low-motion limit, elevation boundaries, and 50-image gate only from multi-device evidence
-6. add representative checkpoint thumbnails only if testers cannot relocate weak sectors from the globe
-7. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
+6. compare production and Sharp Frames hybrid rankings against human blur labels and COLMAP registration; only then consider using the hybrid score for per-sector ranking
+7. add representative checkpoint thumbnails only if testers cannot relocate weak sectors from the globe
+8. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
 
 ---
 

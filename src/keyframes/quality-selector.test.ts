@@ -22,6 +22,7 @@ function candidate(overrides: Partial<QualityCandidate> = {}): QualityCandidate 
     imageAvailable: true,
     imageSynchronized: true,
     sharpnessScore: 0.8,
+    sharpFramesHybridScore: 123,
     textureScore: 0.8,
     ...overrides,
   };
@@ -32,8 +33,10 @@ describe("QualityKeyframeSelector", () => {
     const selector = new QualityKeyframeSelector();
     const decision = selector.evaluate(candidate());
     expect(decision.reason).toBe("accepted");
+    expect(decision.sharpFramesHybridScore).toBe(123);
     expect(decision.quality).toEqual({
       blurScore: expect.closeTo(0.2),
+      sharpFramesHybridScore: 123,
       motionScore: 0,
       noveltyScore: 1,
       coverageGain: 0,

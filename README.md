@@ -2,6 +2,8 @@
 
 Current scope: capture preflight, stop-and-shoot object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, and unsynchronized images. At each new viewpoint it records a bounded stationary burst, retains accepted frames and capture telemetry in the canonical archive, and selects the sharp low-motion checkpoint images for destination exports once coverage is sufficient. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
 
+New captures also record an experimental target-tiled Sharp Frames hybrid score alongside the production sharpness score. It is an attributed adaptation of Reflct's denoised Laplacian–Tenengrad metric and does not yet control acceptance or export ranking. Run `npm run analyze:quality -- /path/to/extracted-capture` to compare both score distributions and their rank correlation. See [third-party notices](public/THIRD_PARTY_NOTICES.txt).
+
 ## Run locally
 
 Requirements: Node.js 18 or newer and npm.

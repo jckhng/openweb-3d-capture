@@ -24,6 +24,8 @@ export interface CameraCalibration {
 
 export interface FrameQuality {
   blurScore: number;
+  /** Experimental target-tiled denoised Laplacian–Tenengrad score. */
+  sharpFramesHybridScore?: number;
   motionScore: number;
   noveltyScore: number;
   coverageGain: number;
@@ -51,6 +53,7 @@ export interface CaptureDecision {
   trackingState: string;
   cameraToWorld: Matrix4;
   sharpnessScore: number;
+  sharpFramesHybridScore?: number;
   textureScore?: number;
   sharpnessThreshold?: number;
   linearVelocity: number;

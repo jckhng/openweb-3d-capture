@@ -1,5 +1,5 @@
 const CACHE = "open-web-3d-capture-shell-v2";
-const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg"];
+const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg", "/THIRD_PARTY_NOTICES.txt"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

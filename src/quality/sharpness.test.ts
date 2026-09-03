@@ -69,8 +69,9 @@ describe("Laplacian sharpness", () => {
       QUALITY_SIZE,
       QUALITY_SIZE,
     );
-    expect(flat).toEqual({ sharpnessScore: 0, textureScore: 0 });
+    expect(flat).toEqual({ sharpnessScore: 0, textureScore: 0, sharpFramesHybridScore: 0 });
     expect(detailed.sharpnessScore).toBeGreaterThan(0.8);
+    expect(detailed.sharpFramesHybridScore).toBeGreaterThan(0);
     expect(detailed.textureScore).toBeGreaterThan(0.5);
   });
 
@@ -104,6 +105,7 @@ describe("Laplacian sharpness", () => {
     );
     expect(blurred.textureScore).toBeGreaterThan(0.12);
     expect(blurred.sharpnessScore).toBeLessThan(sharp.sharpnessScore - 0.2);
+    expect(blurred.sharpFramesHybridScore).toBeLessThan(sharp.sharpFramesHybridScore);
   });
 
   it("rejects inconsistent buffer dimensions", () => {

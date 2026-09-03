@@ -52,7 +52,12 @@ function summarize(values) {
   return {
     count: values.length,
     sharpness: distribution(values.map((value) => value.sharpnessScore)),
+    sharpFramesHybrid: distribution(values.map((value) => value.sharpFramesHybridScore)),
     texture: distribution(values.map((value) => value.textureScore)),
+    currentToHybridRankCorrelation: spearmanRankCorrelation(
+      values.map((value) => value.sharpnessScore),
+      values.map((value) => value.sharpFramesHybridScore),
+    ),
     belowAbsoluteSharpnessFloor: values
       .filter((value) => value.sharpnessScore < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness).length,
     belowAbsoluteSharpnessFloorIds: values
@@ -64,6 +69,39 @@ function summarize(values) {
       .filter((value) => value.textureScore < DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTexture)
       .map((value) => value.candidateId ?? value.frameId),
   };
+}
+
+function spearmanRankCorrelation(left, right) {
+  if (left.length < 2 || left.length !== right.length) return undefined;
+  const leftRanks = ranks(left);
+  const rightRanks = ranks(right);
+  const mean = (left.length - 1) / 2;
+  let covariance = 0;
+  let leftVariance = 0;
+  let rightVariance = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftDelta = leftRanks[index] - mean;
+    const rightDelta = rightRanks[index] - mean;
+    covariance += leftDelta * rightDelta;
+    leftVariance += leftDelta * leftDelta;
+    rightVariance += rightDelta * rightDelta;
+  }
+  const denominator = Math.sqrt(leftVariance * rightVariance);
+  return denominator ? covariance / denominator : undefined;
+}
+
+function ranks(values) {
+  const ordered = values.map((value, index) => ({ value, index }))
+    .sort((left, right) => left.value - right.value || left.index - right.index);
+  const output = new Array(values.length);
+  for (let start = 0; start < ordered.length;) {
+    let end = start + 1;
+    while (end < ordered.length && ordered[end].value === ordered[start].value) end += 1;
+    const averageRank = (start + end - 1) / 2;
+    for (let index = start; index < end; index += 1) output[ordered[index].index] = averageRank;
+    start = end;
+  }
+  return output;
 }
 
 function distribution(values) {

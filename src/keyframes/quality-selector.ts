@@ -36,6 +36,7 @@ export interface QualityCandidate {
   imageAvailable: boolean;
   imageSynchronized: boolean;
   sharpnessScore: number;
+  sharpFramesHybridScore?: number;
   textureScore: number;
   targetDistance?: number;
 }
@@ -83,6 +84,7 @@ export class QualityKeyframeSelector {
       trackingState: candidate.trackingState,
       cameraToWorld: candidate.cameraToWorld.map((row) => [...row]),
       sharpnessScore,
+      sharpFramesHybridScore: candidate.sharpFramesHybridScore,
       textureScore,
       sharpnessThreshold,
       linearVelocity: motion.linearVelocity,
@@ -92,6 +94,7 @@ export class QualityKeyframeSelector {
       targetDistance: candidate.targetDistance,
       quality: {
         blurScore,
+        sharpFramesHybridScore: candidate.sharpFramesHybridScore,
         motionScore: clamp01(motionScore),
         noveltyScore: clamp01(noveltyScore),
         coverageGain: 0,
