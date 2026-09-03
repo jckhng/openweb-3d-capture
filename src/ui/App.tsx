@@ -7,14 +7,21 @@ import type { CapabilityReport, CaptureMetadata, Matrix4 } from "../shared/types
 import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
 import { isOpfsSupported } from "../storage/storage";
+import {
+  inspectBrowserStorage,
+  requestPersistentBrowserStorage,
+  type BrowserStorageStatus,
+} from "../storage/browser-storage";
 import { BUILD_TIMESTAMP, formatBuildTimestamp } from "../shared/build";
 import type { CaptureReadinessReport } from "../shared/types";
 import type { ExportProfile } from "../dataset/zip";
 import { CaptureGlobe } from "./CaptureGlobe";
+import { useScreenWakeLock } from "./use-screen-wake-lock";
 
 const MINIMUM_TARGET_DISTANCE_CM = Math.round(
   DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
 );
+const MINIMUM_FREE_STORAGE_BYTES = 250 * 1024 * 1024;
 
 function createStore() {
   return isOpfsSupported() ? new OPFSCaptureStore() : new MemoryCaptureStore();
@@ -27,9 +34,20 @@ export function App() {
   const [captures, setCaptures] = useState<CaptureMetadata[]>([]);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus>({});
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const previousCheckpointCount = useRef(0);
+  const wakeLockState = useScreenWakeLock(snapshot.running || Boolean(snapshot.captureFinalization));
 
-  const refreshCaptures = async () => setCaptures(await store.listCaptures());
+  const refreshCaptures = async () => {
+    const [nextCaptures, nextStorage] = await Promise.all([
+      store.listCaptures(),
+      inspectBrowserStorage(),
+    ]);
+    setCaptures(nextCaptures);
+    setStorageStatus(nextStorage);
+  };
 
   useEffect(() => controller.subscribe(setSnapshot), [controller]);
 
@@ -71,6 +89,7 @@ export function App() {
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError(undefined);
+    setNotice(undefined);
     try {
       await action();
     } catch (caught) {
@@ -96,6 +115,35 @@ export function App() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  async function startCapture() {
+    if (store.kind !== "opfs") {
+      throw new Error("Persistent browser storage is required for object capture on this device");
+    }
+    const nextStorage = await requestPersistentBrowserStorage();
+    setStorageStatus(nextStorage);
+    if (
+      nextStorage.available !== undefined &&
+      nextStorage.available < MINIMUM_FREE_STORAGE_BYTES
+    ) {
+      throw new Error(`At least ${formatBytes(MINIMUM_FREE_STORAGE_BYTES)} of free browser storage is required`);
+    }
+    await controller.startBasicCapture();
+  }
+
+  async function deleteCapture(capture: CaptureMetadata) {
+    const partial = capture.status === "incomplete" ? " incomplete" : "";
+    if (!window.confirm(`Delete${partial} capture ${capture.captureId}? This cannot be undone.`)) return;
+    await controller.deleteCapture(capture.captureId);
+    await refreshCaptures();
+    setNotice(`Deleted ${capture.captureId}.`);
+  }
+
+  async function copyTesterReport() {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable");
+    await navigator.clipboard.writeText(testReport(snapshot, store.kind, storageStatus, wakeLockState));
+    setNotice("Test report copied. Add what happened and attach the relevant ZIP privately.");
+  }
+
   return (
     <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
@@ -109,6 +157,39 @@ export function App() {
 
       {error || snapshot.lastError ? (
         <div className="error" role="alert">{error ?? snapshot.lastError}</div>
+      ) : null}
+      {notice ? <div className="notice" role="status">{notice}</div> : null}
+
+      {!snapshot.running ? (
+        <section className="onboarding" aria-labelledby="before-capture-title">
+          <div className="section-heading">
+            <h2 id="before-capture-title">Before capturing</h2>
+            <strong className={snapshot.capabilities?.immersiveAR.available ? "available" : "unavailable"}>
+              {snapshot.capabilities?.immersiveAR.available ? "Android WebXR ready" : "Android WebXR required"}
+            </strong>
+          </div>
+          <ol className="capture-steps">
+            <li>Use Android Chrome on an ARCore-capable phone.</li>
+            <li>Choose a static, medium-sized object in bright, even light. Stay at least {MINIMUM_TARGET_DISTANCE_CM} cm away.</li>
+            <li>Open the camera, center the object, then explicitly start capture.</li>
+            <li>Move to the highlighted cell, stop, and wait for the orange confirmation before moving again.</li>
+          </ol>
+          <p className="privacy-note">
+            Local-only: photos and sensor data remain in this browser until you export or delete them. Review captures before sharing because backgrounds may contain private information.
+          </p>
+          <dl className="rollout-status">
+            <Metric label="local storage" value={store.kind === "opfs" ? "available" : "not persistent"} />
+            <Metric label="free space" value={formatBytes(storageStatus.available)} />
+            <Metric
+              label="storage protection"
+              value={storageStatus.persisted === undefined
+                ? "unknown"
+                : storageStatus.persisted ? "persistent" : "best effort"}
+            />
+            <Metric label="screen wake lock" value={wakeLockState} />
+          </dl>
+          {storageWarning(store.kind, storageStatus)}
+        </section>
       ) : null}
 
       {snapshot.running ? (
@@ -152,7 +233,7 @@ export function App() {
           {!snapshot.running ? (
             <button
               className="primary"
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || snapshot.capabilities?.immersiveAR.available !== true}
               onClick={() => void run("opening XR camera", () => controller.start())}
             >
               Open camera
@@ -161,8 +242,8 @@ export function App() {
           {snapshot.running && !snapshot.captureId ? (
             <button
               className="primary"
-              disabled={Boolean(busy)}
-              onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
+              disabled={Boolean(busy) || store.kind !== "opfs"}
+              onClick={() => void run("starting object capture", startCapture)}
             >
               {snapshot.lastCaptureId ? "Start another capture" : "Start capture"}
             </button>
@@ -208,7 +289,7 @@ export function App() {
             </button>
           ) : null}
         </div>
-        <details className="diagnostic-controls">
+        {showDiagnostics ? <details className="diagnostic-controls">
           <summary>Diagnostic controls</summary>
           <div className="actions diagnostic-actions">
             <button
@@ -224,7 +305,7 @@ export function App() {
               Enable camera fallback
             </button>
           </div>
-        </details>
+        </details> : null}
       </section>
 
       {busy ? (
@@ -239,17 +320,29 @@ export function App() {
         <ReadinessPanel report={snapshot.lastReadiness} />
       ) : null}
 
-      <section className="debug-section">
+      <section className="debug-section advanced-toggle">
         <div className="section-heading">
-          <h2>Capabilities</h2>
-          <span className="storage">storage: {store.kind}</span>
+          <h2>Advanced diagnostics</h2>
+          <button disabled={Boolean(busy)} onClick={() => setShowDiagnostics((visible) => !visible)}>
+            {showDiagnostics ? "Hide" : "Show"}
+          </button>
         </div>
-        <CapabilityGrid report={snapshot.capabilities} />
+        <p className="muted">Capability details, capture telemetry, matrices, and diagnostic controls.</p>
       </section>
 
-      <section className="debug-section">
-        <h2>Live XR telemetry</h2>
-        <dl className="telemetry">
+      {showDiagnostics ? (
+        <>
+          <section className="debug-section">
+            <div className="section-heading">
+              <h2>Capabilities</h2>
+              <span className="storage">storage: {store.kind}</span>
+            </div>
+            <CapabilityGrid report={snapshot.capabilities} />
+          </section>
+
+          <section className="debug-section">
+            <h2>Live XR telemetry</h2>
+            <dl className="telemetry">
           <Metric label="session" value={snapshot.running ? "running" : "stopped"} />
           <Metric label="tracking" value={snapshot.trackingState} />
           <Metric label="XR FPS" value={snapshot.xrFps} />
@@ -367,16 +460,18 @@ export function App() {
             label="angular velocity"
             value={`${(snapshot.captureQuality.angularVelocity * 180 / Math.PI).toFixed(1)} deg/s`}
           />
-        </dl>
-        <div className="matrix-grid">
-          <MatrixPanel title="Camera-to-world pose" matrix={snapshot.pose} />
-          <MatrixPanel title="Projection matrix" matrix={toRows(snapshot.projectionMatrix)} />
-        </div>
-        <div className="intrinsics">
-          <h3>Intrinsics</h3>
-          <code>{snapshot.intrinsics ? JSON.stringify(snapshot.intrinsics, null, 2) : "unavailable"}</code>
-        </div>
-      </section>
+            </dl>
+            <div className="matrix-grid">
+              <MatrixPanel title="Camera-to-world pose" matrix={snapshot.pose} />
+              <MatrixPanel title="Projection matrix" matrix={toRows(snapshot.projectionMatrix)} />
+            </div>
+            <div className="intrinsics">
+              <h3>Intrinsics</h3>
+              <code>{snapshot.intrinsics ? JSON.stringify(snapshot.intrinsics, null, 2) : "unavailable"}</code>
+            </div>
+          </section>
+        </>
+      ) : null}
 
       <section className="debug-section">
         <div className="section-heading">
@@ -396,13 +491,16 @@ export function App() {
                     {capture.applicationBuild ? ` · build ${formatBuildTimestamp(capture.applicationBuild.builtAt)}` : " · legacy build"}
                     {capture.readiness ? ` · ${readinessLabel(capture.readiness.status)}` : " · preflight unavailable"}
                   </span>
+                  {capture.status === "incomplete" ? (
+                    <small>Interrupted capture. Export the partial data or delete it; resuming is unsafe after WebXR creates a new coordinate frame.</small>
+                  ) : null}
                 </div>
                 <div className="capture-export-actions">
                   <button
                     disabled={Boolean(busy)}
                     onClick={() => void run("exporting canonical archive", () => downloadCapture("canonical", capture.captureId))}
                   >
-                    Archive
+                    {capture.status === "incomplete" ? "Export partial" : "Archive"}
                   </button>
                   <button
                     disabled={Boolean(busy)}
@@ -416,6 +514,13 @@ export function App() {
                   >
                     LichtFeld
                   </button>
+                  <button
+                    className="danger"
+                    disabled={Boolean(busy)}
+                    onClick={() => void run("deleting capture", () => deleteCapture(capture))}
+                  >
+                    Delete
+                  </button>
                 </div>
               </li>
             ))}
@@ -423,6 +528,16 @@ export function App() {
         ) : (
           <p className="muted">No persisted captures found.</p>
         )}
+      </section>
+
+      <section className="tester-panel">
+        <h2>Wider-test feedback</h2>
+        <p>Copy the device/build report, add the observed problem and reproduction steps, then send it with the relevant Archive ZIP through a private channel.</p>
+        <div className="actions">
+          <button disabled={Boolean(busy)} onClick={() => void run("copying test report", copyTesterReport)}>
+            Copy test report
+          </button>
+        </div>
       </section>
     </main>
   );
@@ -509,6 +624,59 @@ function toRows(values?: number[]): Matrix4 | undefined {
 
 function formatResolution(value?: { width: number; height: number }) {
   return value ? `${value.width} × ${value.height}` : "unavailable";
+}
+
+function formatBytes(value?: number): string {
+  if (value === undefined) return "unknown";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.round(value / 1024 ** 2)} MB`;
+}
+
+function storageWarning(kind: string, status: BrowserStorageStatus) {
+  if (kind !== "opfs") {
+    return <p className="storage-warning">Persistent OPFS storage is unavailable. Capture is disabled to prevent data loss.</p>;
+  }
+  if (status.available !== undefined && status.available < MINIMUM_FREE_STORAGE_BYTES) {
+    return (
+      <p className="storage-warning">
+        Less than {formatBytes(MINIMUM_FREE_STORAGE_BYTES)} is free. Export and delete old captures before starting.
+      </p>
+    );
+  }
+  if (status.persisted === false) {
+    return <p className="storage-warning">Browser storage is best effort. The app will request protection when capture starts.</p>;
+  }
+  return null;
+}
+
+function testReport(
+  snapshot: DiagnosticSnapshot,
+  storageKind: string,
+  storage: BrowserStorageStatus,
+  wakeLockState: string,
+): string {
+  const lines = [
+    "Open Web 3D Capture wider-test report",
+    `Build: ${formatBuildTimestamp()}`,
+    `URL: ${window.location.href}`,
+    `User agent: ${navigator.userAgent}`,
+    `WebXR immersive AR: ${snapshot.capabilities?.immersiveAR.available ? "available" : "unavailable"}`,
+    `Storage: ${storageKind}; ${formatBytes(storage.available)} free; protection ${storage.persisted === undefined ? "unknown" : storage.persisted ? "persistent" : "best effort"}`,
+    `Screen wake lock: ${wakeLockState}`,
+    `Capture ID: ${snapshot.lastCaptureId ?? snapshot.captureId ?? "none"}`,
+    `Readiness: ${snapshot.lastReadiness ? readinessLabel(snapshot.lastReadiness.status) : "unavailable"}`,
+    "",
+    "Observed problem:",
+    "",
+    "Steps to reproduce:",
+    "",
+    "Expected:",
+    "",
+    "Actual:",
+    "",
+    "Spirula/LichtFeld result:",
+  ];
+  return lines.join("\n");
 }
 
 function formatNumber(value?: number) {

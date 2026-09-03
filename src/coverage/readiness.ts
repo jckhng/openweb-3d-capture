@@ -15,7 +15,6 @@ const AZIMUTH_BIN_COUNT = 12;
 const MINIMUM_IMAGE_FRAMES = 50;
 const MINIMUM_SHARPNESS = 0.38;
 const MINIMUM_ADJACENT_EDGE_COVERAGE = 0.8;
-const ELEVATION_BAND_ANGLE_DEGREES = 8;
 const MINIMUM_ELEVATION_SPAN_DEGREES = 20;
 const MINIMUM_FRAMES_FOR_VISUAL_CHECK = 12;
 const MAXIMUM_LOOP_ROTATION_RADIANS = 25 * Math.PI / 180;
@@ -29,10 +28,10 @@ const COVERAGE_LATITUDE_BANDS: ReadonlyArray<{
   maximumDegrees: number;
   requiredStride: number;
 }> = [
-  { latitude: "low", minimumDegrees: -30, maximumDegrees: -5, requiredStride: 2 },
-  { latitude: "level", minimumDegrees: -5, maximumDegrees: 15, requiredStride: 1 },
-  { latitude: "raised", minimumDegrees: 15, maximumDegrees: 45, requiredStride: 2 },
-  { latitude: "high", minimumDegrees: 45, maximumDegrees: 90, requiredStride: 12 },
+  { latitude: "low", minimumDegrees: -20, maximumDegrees: 5, requiredStride: 2 },
+  { latitude: "level", minimumDegrees: 5, maximumDegrees: 35, requiredStride: 1 },
+  { latitude: "raised", minimumDegrees: 35, maximumDegrees: 60, requiredStride: 2 },
+  { latitude: "high", minimumDegrees: 60, maximumDegrees: 90, requiredStride: 12 },
 ];
 
 type ElevationBand = "low" | "level" | "high";
@@ -57,6 +56,10 @@ export function analyzeCaptureReadiness(
   const physicalLoopClosed = isPhysicalLoopClosed(imageFrames, targetEstimate);
   const loopClosureDetected = visual.loopClosureDetected;
   const issues: CaptureReadinessIssue[] = [];
+  const completedCheckpoints = coverage.cells.filter(
+    (cell) => cell.required && cell.state === "captured",
+  ).length;
+  const requiredCheckpoints = coverage.cells.filter((cell) => cell.required).length;
 
   if (imageFrames.length < MINIMUM_IMAGE_FRAMES) {
     const remaining = MINIMUM_IMAGE_FRAMES - imageFrames.length;
@@ -85,6 +88,16 @@ export function analyzeCaptureReadiness(
       severity: "risk",
       message: unsynchronized + " images are not synchronized to their WebXR poses.",
       action: "Use the XR camera stream for the capture, or rely on downstream SfM for all poses.",
+    });
+  }
+
+  if (completedCheckpoints < requiredCheckpoints) {
+    const missing = requiredCheckpoints - completedCheckpoints;
+    issues.push({
+      code: "missing-coverage-checkpoints",
+      severity: "repair",
+      message: `${missing} of ${requiredCheckpoints} required viewpoint cells still need a sharp stationary burst.`,
+      action: "Move to the highlighted unlit cell, stop, and hold until it turns orange.",
     });
   }
 
@@ -191,10 +204,8 @@ export function analyzeCaptureReadiness(
       elevationBandsCovered: coverage.elevationBandsCovered,
       elevationSpanDegrees: coverage.elevationSpanDegrees,
       coverageCells: coverage.cells,
-      coverageCheckpointsCompleted: coverage.cells.filter(
-        (cell) => cell.required && cell.state === "captured",
-      ).length,
-      coverageCheckpointsRequired: coverage.cells.filter((cell) => cell.required).length,
+      coverageCheckpointsCompleted: completedCheckpoints,
+      coverageCheckpointsRequired: requiredCheckpoints,
       currentCoverageCell: coverage.currentCell,
       targetEstimate,
       visualConnectedFrames: visual.connectedFrameCount,
@@ -231,7 +242,7 @@ function primaryAction(
   }
   const priority = status === "capture-risk"
     ? ["missing-images", "unsynchronized-images", "soft-accepted-images", "visual-check-unavailable"]
-    : ["visual-disconnected", "weak-bridge", "missing-azimuth", "missing-elevation", "loop-not-closed", "insufficient-frames"];
+    : ["visual-disconnected", "weak-bridge", "missing-coverage-checkpoints", "missing-azimuth", "missing-elevation", "loop-not-closed", "insufficient-frames"];
   for (const code of priority) {
     const issue = issues.find((candidate) => candidate.code === code);
     if (issue) return issue.action;
@@ -334,13 +345,7 @@ function analyzeCoverage(
     const { azimuthBin, elevation, latitude } = coverageCell;
     bins.add(azimuthBin);
     elevations.push(elevation);
-    bands.add(
-      elevation < -ELEVATION_BAND_ANGLE_DEGREES
-        ? "low"
-        : elevation > ELEVATION_BAND_ANGLE_DEGREES
-          ? "high"
-          : "level",
-    );
+    bands.add(latitude === "low" ? "low" : latitude === "level" ? "level" : "high");
     currentCell = { azimuthBin, latitude };
     const cell = cells.find(
       (candidate) => candidate.azimuthBin === azimuthBin && candidate.latitude === latitude,

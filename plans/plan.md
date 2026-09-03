@@ -14,12 +14,16 @@ Implemented:
 
 * Vite, React, TypeScript, PWA manifest, production service worker
 * visible UTC build timestamp persisted into every new capture export
+* first-run capture instructions, supported-platform status, local-data disclosure, free-space status, and persistent-storage request
 * browser capability probe and live diagnostic UI
 * immersive AR session, pose, projection, intrinsics, frame-rate, IMU, and CPU-depth telemetry
 * 20-frame diagnostic capture with raw-XR-camera readback where granted
 * OPFS persistence with in-memory fallback
 * Nerfstudio-compatible ZIP serialization plus separate application telemetry
 * local capture listing and export after reload
+* explicit deletion and partial export for interrupted captures; capture resume is rejected because a new WebXR session has a different local coordinate frame
+* screen wake lock during XR capture and deferred finalization where the browser supports it
+* copyable build/device/storage/readiness tester report
 * matrix and dataset serialization unit tests
 * secure-origin and experimental-API documentation
 * open-ended M1 object recorder with explicit start/stop
@@ -67,12 +71,14 @@ Implemented:
 * destination-independent capture-readiness report with explicit repair/risk reason codes
 * object-centered twelve-sector azimuth coverage and low/level/high elevation analysis
 * visual disconnection, weak adjacent bridge, and physical/visual loop-return checks
-* translucent continuously rotating 12-longitude × 4-layer coverage globe with 25 required checkpoints: 6 slightly below, 12 horizon, 6 above, and 1 top
+* translucent continuously rotating 12-longitude × 4-layer coverage globe with 25 required checkpoints: 6 low, 12 standard handheld, 6 raised, and 1 azimuth-independent top cap
+* position-relative elevation bands shifted around the normal slightly top-down handheld posture: low -20°..5°, standard 5°..35°, raised 35°..60°, and top 60°..90°
 * live WebXR azimuth/elevation globe orientation with a three-quarter top-down presentation and visible reverse-side cells
 * light-blue uncaptured, blue active, and orange completed checkpoint states
 * explicit move → hold → confirm → advance capture phases, separating navigation from sharp image acquisition
 * bounded two-frame stationary bursts admitted after each novel viewpoint, with haptic and visual completion confirmation
 * checkpoint cells that remain incomplete until two sharp, low-motion reconstruction images are retained
+* readiness gate that cannot report ready while a required globe checkpoint remains incomplete
 * post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
 * destination packages that retain WebXR provenance without root pose/reconstruction markers
@@ -86,7 +92,7 @@ Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (75 tests)
+npm test        PASS (77 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -1008,13 +1014,15 @@ Experiment conclusion:
 * full mobile SfM and bundle adjustment are no longer v1 requirements
 * retain the experiments for regression research; do not expose them in the normal capture or export workflow
 
-Next production bound:
+Wider-rollout bound:
 
-1. validate the continuous three-quarter globe orientation, translucency, colors, move/hold/confirm timing, and haptics on the target phone
-2. compare the checkpoint-selected Spirula/LichtFeld image set against the full canonical set for registration rate, blur, reconstruction quality, and handoff time
-3. tune the two-frame burst, low-motion limit, and 50-image export gate only from hardware evidence
-4. add representative checkpoint thumbnails when the globe alone is insufficient to locate a weak bridge
-5. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
+1. deploy the hardened build and confirm its visible build timestamp on each tester phone
+2. validate the shifted standard ring, continuous three-quarter globe, colors, move/hold/confirm timing, haptics, wake lock, and save-before-analysis behavior on at least three ARCore devices
+3. reconstruct each checkpoint-selected image set through Spirula native SfM and LichtFeld `community:colmap`; record registration rate, blur, reconstruction quality, and handoff time
+4. collect the copyable tester report plus the private canonical ZIP for failures; do not publish raw captures because backgrounds may contain private information
+5. tune the two-frame burst, low-motion limit, elevation boundaries, and 50-image gate only from multi-device evidence
+6. add representative checkpoint thumbnails only if testers cannot relocate weak sectors from the globe
+7. add an autofocus photo path or native precision spike only for subjects outside WebXR's calibrated focus envelope
 
 ---
 
@@ -1049,7 +1057,7 @@ CONFIRM cell with light + haptic
 ADVANCE to next highlighted checkpoint
 ```
 
-The normal capture UI uses a translucent rotating globe. It has twelve longitude sectors and four capture layers: slightly below, horizon, above, and top. Required checkpoints are distributed 6/12/6/1 respectively. The globe uses continuous WebXR azimuth and elevation rather than snapping its display to the current cell. Reverse-side cells remain visible through the sphere.
+The normal capture UI uses a translucent rotating globe. It has twelve longitude sectors and four capture layers: low, standard handheld, raised, and top. Required checkpoints are distributed 6/12/6/1 respectively. The standard 12-sector layer is 5°–35° above the target, matching a phone held naturally above the object and aimed slightly downward. The low layer requires physically lowering the camera; tilting upward from the same position does not create parallax. The top is one cap because azimuth is degenerate there. The globe uses continuous WebXR camera position around the target rather than snapping its display to the current cell. Reverse-side cells remain visible through the sphere.
 
 Conceptually:
 

@@ -387,6 +387,17 @@ export class XRDiagnosticController {
     };
   }
 
+  async deleteCapture(captureId: string): Promise<void> {
+    if (this.activeCapture?.id === captureId) throw new Error("Stop the active capture before deleting it");
+    await this.persistence.deleteCapture(captureId);
+    if (this.lastCaptureId === captureId) {
+      this.lastCaptureId = undefined;
+      this.snapshot.lastCaptureId = undefined;
+      this.snapshot.lastReadiness = undefined;
+      this.emit();
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.session) await this.session.end();
     else this.handleSessionEnd();

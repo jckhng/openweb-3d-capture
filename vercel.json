@@ -8,6 +8,14 @@
                 {
                     "key": "Permissions-Policy",
                     "value": "camera=(self), accelerometer=(self), gyroscope=(self), xr-spatial-tracking=(self)"
+                },
+                {
+                    "key": "Referrer-Policy",
+                    "value": "no-referrer"
+                },
+                {
+                    "key": "X-Content-Type-Options",
+                    "value": "nosniff"
                 }
             ]
         },

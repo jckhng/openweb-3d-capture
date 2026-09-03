@@ -123,6 +123,7 @@ export type CaptureReadinessReasonCode =
   | "missing-images"
   | "unsynchronized-images"
   | "soft-accepted-images"
+  | "missing-coverage-checkpoints"
   | "missing-azimuth"
   | "missing-elevation"
   | "visual-check-unavailable"

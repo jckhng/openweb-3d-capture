@@ -9,10 +9,7 @@ import { analyzeCaptureReadiness, locateCoverageCell, summarizeCaptureReadiness 
 
 describe("capture readiness", () => {
   it("marks a connected closed orbit with full azimuth and elevation coverage ready", () => {
-    const frames = orbitFrames(60, (index, count) => ({
-      angle: 2 * Math.PI * index / (count - 1),
-      elevation: index === count - 1 ? -15 : [-15, 0, 15][index % 3],
-    }));
+    const frames = completeCoverageFrames();
     const report = analyzeCaptureReadiness(
       { frames, decisions: [], visualTracking: trackingReport(frames) },
       new Date("2026-09-01T00:00:00.000Z"),
@@ -21,17 +18,17 @@ describe("capture readiness", () => {
     expect(report.status).toBe("ready");
     expect(report.issues).toEqual([]);
     expect(report.metrics).toMatchObject({
-      acceptedFrames: 60,
-      imageFrames: 60,
-      synchronizedImageFrames: 60,
+      acceptedFrames: 50,
+      imageFrames: 50,
+      synchronizedImageFrames: 50,
       azimuthBinsCovered: 12,
       elevationBandsCovered: ["low", "level", "high"],
-      visualConnectedFrames: 60,
+      visualConnectedFrames: 50,
       visualComponentCount: 1,
       loopClosureDetected: true,
-      physicalLoopClosed: true,
+      physicalLoopClosed: false,
     });
-    expect(report.metrics.elevationSpanDegrees).toBeCloseTo(30, 5);
+    expect(report.metrics.elevationSpanDegrees).toBeCloseTo(75, 5);
     expect(summarizeCaptureReadiness(report)).toEqual({
       status: "ready",
       primaryAction: report.primaryAction,
@@ -42,7 +39,7 @@ describe("capture readiness", () => {
   it("asks the user to continue around the object when orbit sectors are missing", () => {
     const frames = orbitFrames(50, (index, count) => ({
       angle: Math.PI * index / (count - 1),
-      elevation: [-15, 0, 15][index % 3],
+      elevation: [-10, 20, 45][index % 3],
     }));
     const report = analyzeCaptureReadiness({
       frames,
@@ -53,13 +50,13 @@ describe("capture readiness", () => {
     expect(report.status).toBe("add-views");
     expect(report.metrics.azimuthBinsCovered).toBeLessThan(12);
     expect(report.issues.map((issue) => issue.code)).toContain("missing-azimuth");
-    expect(report.primaryAction).toContain("Continue around the object");
+    expect(report.primaryAction).toContain("highlighted unlit cell");
   });
 
   it("requests both lower and higher views when the orbit stays level", () => {
     const frames = orbitFrames(60, (index, count) => ({
       angle: 2 * Math.PI * index / (count - 1),
-      elevation: 0,
+      elevation: 20,
     }));
     const report = analyzeCaptureReadiness({
       frames,
@@ -76,7 +73,7 @@ describe("capture readiness", () => {
   it("prioritizes rebuilding overlap when the visual graph is disconnected", () => {
     const frames = orbitFrames(60, (index, count) => ({
       angle: 2 * Math.PI * index / (count - 1),
-      elevation: index === count - 1 ? -15 : [-15, 0, 15][index % 3],
+      elevation: index === count - 1 ? -10 : [-10, 20, 45][index % 3],
     }));
     const visualTracking = trackingReport(frames, {
       connectedFrameCount: 30,
@@ -93,7 +90,7 @@ describe("capture readiness", () => {
   it("flags unsynchronized reconstruction images as capture risk", () => {
     const frames = orbitFrames(60, (index, count) => ({
       angle: 2 * Math.PI * index / (count - 1),
-      elevation: index === count - 1 ? -15 : [-15, 0, 15][index % 3],
+      elevation: index === count - 1 ? -10 : [-10, 20, 45][index % 3],
     }));
     frames[20] = { ...frames[20], imageSynchronized: false };
     const report = analyzeCaptureReadiness({
@@ -108,10 +105,7 @@ describe("capture readiness", () => {
   });
 
   it("estimates the object center from camera rays when depth is unavailable", () => {
-    const frames = orbitFrames(60, (index, count) => ({
-      angle: 2 * Math.PI * index / (count - 1),
-      elevation: index === count - 1 ? -15 : [-15, 0, 15][index % 3],
-    }));
+    const frames = completeCoverageFrames();
     const withoutDepth = frames.map((frame) => ({ ...frame, targetDistance: undefined }));
     const report = analyzeCaptureReadiness({
       frames: withoutDepth,
@@ -129,7 +123,7 @@ describe("capture readiness", () => {
   });
 
   it("lights a globe checkpoint only after a stable two-frame burst", () => {
-    const frames = orbitFrames(4, () => ({ angle: 0, elevation: 0 })).map((frame, index) => ({
+    const frames = orbitFrames(4, () => ({ angle: 0, elevation: 20 })).map((frame, index) => ({
       ...frame,
       quality: {
         ...frame.quality,
@@ -153,7 +147,7 @@ describe("capture readiness", () => {
   });
 
   it("retains at most the ten sharpest stationary images in a coverage cell", () => {
-    const frames = orbitFrames(12, () => ({ angle: 0, elevation: 0 })).map((frame, index) => ({
+    const frames = orbitFrames(12, () => ({ angle: 0, elevation: 20 })).map((frame, index) => ({
       ...frame,
       quality: {
         ...frame.quality,
@@ -172,8 +166,8 @@ describe("capture readiness", () => {
   });
 
   it("treats the top layer as one azimuth-independent checkpoint", () => {
-    const left = orbitFrames(1, () => ({ angle: 0, elevation: 60 }))[0];
-    const right = orbitFrames(1, () => ({ angle: Math.PI, elevation: 60 }))[0];
+    const left = orbitFrames(1, () => ({ angle: 0, elevation: 65 }))[0];
+    const right = orbitFrames(1, () => ({ angle: Math.PI, elevation: 65 }))[0];
 
     expect(locateCoverageCell(left.cameraToWorld, [0, 0, 0])).toMatchObject({
       azimuthBin: 0,
@@ -184,7 +178,42 @@ describe("capture readiness", () => {
       latitude: "high",
     });
   });
+
+  it("uses camera position rather than phone pitch for the standard handheld ring", () => {
+    const frame = orbitFrames(1, () => ({ angle: 0, elevation: 20 }))[0];
+    const positionOnlyPose: Matrix4 = [
+      [1, 0, 0, frame.cameraToWorld[0][3]],
+      [0, 1, 0, frame.cameraToWorld[1][3]],
+      [0, 0, 1, frame.cameraToWorld[2][3]],
+      [0, 0, 0, 1],
+    ];
+
+    expect(locateCoverageCell(positionOnlyPose, [0, 0, 0])).toMatchObject({
+      latitude: "level",
+      elevation: expect.closeTo(20, 5),
+    });
+  });
 });
+
+function completeCoverageFrames(): CaptureFrame[] {
+  const checkpoints = [
+    ...Array.from({ length: 12 }, (_, azimuthBin) => ({ azimuthBin, elevation: 20 })),
+    ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, elevation: 45 })),
+    { azimuthBin: 0, elevation: 65 },
+    ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, elevation: -10 })),
+  ];
+  return checkpoints.flatMap(({ azimuthBin, elevation }) => (
+    orbitFrames(2, () => ({
+      angle: -Math.PI + (azimuthBin + 0.5) * 2 * Math.PI / 12,
+      elevation,
+    }))
+  )).map((frame, id) => ({
+    ...frame,
+    id,
+    timestamp: id * 250,
+    imagePath: `images/${String(id).padStart(6, "0")}.jpg`,
+  }));
+}
 
 function orbitFrames(
   count: number,

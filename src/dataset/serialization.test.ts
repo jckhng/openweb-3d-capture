@@ -356,6 +356,11 @@ describe("Nerfstudio serialization", () => {
       );
       expect(manifest).toMatchObject({ profile, finalPoseAuthority: "downstream-sfm" });
       expect(manifest.imageSelection.mode).toBe("all-images-fallback");
+      const instructions = files.find((file) => file.path.startsWith("README-"))!.data as string;
+      if (profile === "lichtfeld") {
+        expect(instructions).toContain("community:colmap");
+        expect(instructions).toContain("LichtFeld 0.5.0 or newer");
+      }
     }
   });
 

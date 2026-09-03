@@ -36,14 +36,14 @@ M2 test sequence:
 4. Center a static, textured object at least 45 cm from the phone. Confirm the live target-distance value is plausible, then select **Start capture**.
 5. Move to the highlighted translucent-globe sector. Movement is navigation only; the app does not expect a sharp keyframe while walking.
 6. Stop briefly and hold the phone steady while the app records a two-frame sharp burst. Wait for the haptic and **SECTOR CAPTURED** confirmation before moving again.
-7. Repeat for the required level, raised, high, and low checkpoints. Select **Stop and save** when the globe and readiness result show sufficient coverage.
-8. Select **Export latest**.
+7. Repeat for the required standard, raised, top, and low checkpoints. Select **Finish scan** when the globe and readiness result show sufficient coverage.
+8. Export the capture for Spirula, LichtFeld, or as a full archive.
 9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
 10. Reconstruct the images through Spirula native SfM or LichtFeld's COLMAP Reconstruction plugin before training. Do not treat the WebXR transform file as final reconstruction poses.
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
 
-During capture, a translucent 12-longitude by 4-layer globe rotates continuously with the live WebXR azimuth and elevation. Uncaptured cells are light blue, the active cell is blue, and completed cells are orange; reverse-side cells remain visible. The 25 required checkpoints comprise six slightly-below views, twelve horizon views, six above views, and one top view. A checkpoint lights only after two sharp, low-motion images are retained.
+During capture, a translucent 12-longitude by 4-layer globe rotates continuously with the live WebXR azimuth and elevation. Uncaptured cells are light blue, the active cell is blue, and completed cells are orange; reverse-side cells remain visible. The 25 required checkpoints comprise six low views (-20° to 5°), twelve standard handheld views (5° to 35° above the object), six raised views (35° to 60°), and one top cap (60° to 90°). This makes the normal phone-at-chest/head-height, camera-pointed-slightly-downward posture the dense ring. Coverage is derived from camera position around the estimated object, not phone pitch alone. A checkpoint lights only after two sharp, low-motion images are retained.
 
 Stopping first marks the capture durable in OPFS and exposes it in the capture library. Deferred visual analysis runs afterward. The UI explicitly reports when the photos are safe; leaving at that point preserves the capture but may skip final connectivity checks.
 
@@ -53,7 +53,7 @@ Three export buttons are available:
 
 - **Archive ZIP** preserves the complete canonical dataset, including raw WebXR transforms, depth, IMU, diagnostics, and optional seed point cloud.
 - **Spirula ZIP** contains reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. Images are checkpoint-selected when the safety gate passes. The package intentionally omits root reconstruction markers so native SfM runs.
-- **LichtFeld ZIP** contains reconstruction images, provenance, readiness report, and instructions for the COLMAP Reconstruction plugin. Images are checkpoint-selected when the safety gate passes. The package intentionally contains no fabricated COLMAP model.
+- **LichtFeld ZIP** contains reconstruction images, provenance, readiness report, and instructions for the `community:colmap` COLMAP Reconstruction plugin (LichtFeld 0.5.0 or newer). Images are checkpoint-selected when the safety gate passes. The package intentionally contains no fabricated COLMAP model.
 
 Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. Each populated globe cell retains at most its ten sharpest stationary images for destination selection, and the recorder stops admitting frames after that cell reaches its limit. A complete 25-checkpoint capture therefore begins at 50 images without growing indefinitely as sectors are revisited. Incomplete but sufficiently distributed captures use the same bounded sector selection; very sparse captures fall back to every image. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
 
@@ -162,7 +162,7 @@ npm run optimize:landmarks -- \
 
 This output is also diagnostic-only. Use `--rotation-only` to isolate SO(3), or `--calibration /path/to/refinement.json` for a reference-calibration experiment. Neither option enables refined export.
 
-The production build registers a network-first service worker with offline fallback. The Vite development build does not register it.
+The production build registers a network-first service worker with offline fallback. The Vite development build does not register it. See [Wider rollout testing](docs/wider-testing.md) for supported devices, the capture protocol, privacy behavior, failure recovery, and the feedback package.
 
 The capture HUD shows the UTC production build time. New captures also persist it as `applicationBuild.builtAt` in `capture.json`, making stale phone deployments identifiable from both the live UI and exported ZIP.
 
@@ -186,7 +186,7 @@ The capture HUD shows the UTC production build time. New captures also persist i
 - The second capture yields six validated long-range loop closures; the seesaw replay yields none. Pairwise SE(3) correction is rejected. A multi-view landmark prototype improves one reference capture but regresses another despite improving held-out reprojection in both. Mobile pose refinement is therefore removed from the production path and retained only as a research tool.
 - Unified deferred matching across offsets 1/2/4 takes approximately 61–70 seconds on the development desktop. Production capture guidance should use only the bounded live/deferred checks needed for coverage and weak-bridge detection.
 - Registration and reprojection residual alone are insufficient for object readiness: a sparse low-light plush capture registered 32/32 frames through its patterned background despite inadequate object sampling. Target-region feature and coverage gates remain required.
-- A depth-derived seed point cloud is generated in the canonical archive. The new Spirula and LichtFeld destination packages still require direct end-to-end import tests in both desktop applications.
+- A depth-derived seed point cloud is generated in the canonical archive. Spirula direct import/training is confirmed. The LichtFeld `community:colmap` handoff still requires an end-to-end rollout test.
 - The worker now records feature and geometric-inlier concentration inside the centered 60% target-region proxy. These values are informational until hardware captures calibrate a safe readiness threshold.
 - A depth-derived seed point cloud is generated during ZIP export. Direct Spirula Studio import and training have been confirmed; raw WebXR pose registration still produces low-quality geometry and requires downstream SfM/refinement.
 

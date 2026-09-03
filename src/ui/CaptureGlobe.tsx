@@ -9,7 +9,7 @@ const LONGITUDE_SECTORS = 12;
 const CENTER_X = 100;
 const CENTER_Y = 86;
 const RADIUS = 76;
-const DISPLAY_ELEVATION = 28;
+const DISPLAY_ELEVATION = 32;
 
 const LATITUDES: ReadonlyArray<{
   latitude: CaptureCoverageLatitude;
@@ -17,10 +17,10 @@ const LATITUDES: ReadonlyArray<{
   maximum: number;
   center: number;
 }> = [
-  { latitude: "high", minimum: 45, maximum: 90, center: 67.5 },
-  { latitude: "raised", minimum: 15, maximum: 45, center: 30 },
-  { latitude: "level", minimum: -5, maximum: 15, center: 5 },
-  { latitude: "low", minimum: -30, maximum: -5, center: -17.5 },
+  { latitude: "high", minimum: 60, maximum: 90, center: 75 },
+  { latitude: "raised", minimum: 35, maximum: 60, center: 47.5 },
+  { latitude: "level", minimum: 5, maximum: 35, center: 20 },
+  { latitude: "low", minimum: -20, maximum: 5, center: -7.5 },
 ];
 
 export function CaptureGlobe({
@@ -79,7 +79,7 @@ export function CaptureGlobe({
             ].filter(Boolean).join(" ")}
           />
         ))}
-        {[-30, -5, 15, 45, 90].map((latitude) => (
+        {[-20, 5, 35, 60, 90].map((latitude) => (
           <polyline
             key={latitude}
             points={latitudeLine(latitude, orientation)}
@@ -231,5 +231,5 @@ function latitudeLabel(latitude: CaptureCoverageLatitude): string {
   if (latitude === "raised") return "above";
   if (latitude === "high") return "top";
   if (latitude === "low") return "slightly below";
-  return "horizon";
+  return "standard";
 }
