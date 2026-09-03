@@ -40,6 +40,7 @@ export interface CaptureReadinessInput {
   frames: readonly CaptureFrame[];
   decisions?: readonly CaptureDecision[];
   visualTracking?: VisualTrackingReport;
+  targetEstimate?: [number, number, number];
 }
 
 export function analyzeCaptureReadiness(
@@ -50,7 +51,7 @@ export function analyzeCaptureReadiness(
   const imageFrames = frames.filter((frame) => Boolean(frame.imagePath));
   const synchronizedImageFrames = imageFrames.filter((frame) => frame.imageSynchronized === true);
   const sharpnessValues = acceptedSharpness(input.decisions ?? [], imageFrames);
-  const targetEstimate = estimateTarget(imageFrames);
+  const targetEstimate = input.targetEstimate ?? estimateTarget(imageFrames);
   const coverage = analyzeCoverage(imageFrames, targetEstimate);
   const visual = analyzeVisualTracking(imageFrames, input.visualTracking);
   const physicalLoopClosed = isPhysicalLoopClosed(imageFrames, targetEstimate);

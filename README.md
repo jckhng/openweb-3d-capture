@@ -1,8 +1,12 @@
 # Open Web 3D Capture
 
-Current scope: capture preflight, stop-and-shoot object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, rejects blur, excessive motion, close-range fixed-focus failures, bad tracking, and unsynchronized images. At each new viewpoint it records a bounded stationary burst, retains accepted frames and capture telemetry in the canonical archive, and selects the sharp low-motion checkpoint images for destination exports once coverage is sufficient. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
+Current scope: capture preflight, stop-and-shoot object coverage guidance, and safe handoff to Spirula Studio and LichtFeld Studio. The Android Chrome WebXR recorder evaluates up to four synchronized candidates per second, locks the centered subject in world space at Start, projects that target into every camera frame, and rejects off-target framing, subject-region blur, excessive motion, close-range fixed-focus failures, bad tracking, and unsynchronized images. At each new viewpoint it records a bounded stationary burst, retains accepted frames and capture telemetry in the canonical archive, and selects the sharp low-motion checkpoint images for destination exports once coverage is sufficient. WebXR poses support navigation and diagnostics; production reconstruction uses downstream visual SfM.
 
-New captures also record an experimental target-tiled Sharp Frames hybrid score alongside the production sharpness score. It is an attributed adaptation of Reflct's denoised Laplacian–Tenengrad metric and does not yet control acceptance or export ranking. Run `npm run analyze:quality -- /path/to/extracted-capture` to compare both score distributions and their rank correlation. See [third-party notices](public/THIRD_PARTY_NOTICES.txt).
+New captures also record an experimental target-tiled Sharp Frames hybrid score alongside the production sharpness score. It is an attributed adaptation of Reflct's denoised Laplacian–Tenengrad metric. It ranks otherwise eligible destination-export frames but does not control live acceptance. Run `npm run analyze:quality -- /path/to/extracted-capture` to compare both score distributions and their rank correlation. See [third-party notices](public/THIRD_PARTY_NOTICES.txt).
+
+## Capture-data privacy
+
+Capture processing and persistence are local to the browser. Photos, depth maps, camera poses, motion samples, quality decisions, and reconstruction preflight results are stored in OPFS on the device. The application has no capture-upload endpoint, cloud synchronization, user account, or analytics integration. Capture data leaves the device only after the user exports a ZIP and independently shares or uploads that file. The static hosting provider still receives ordinary requests for the application files and normal request metadata; it does not receive the capture dataset.
 
 ## Run locally
 
@@ -37,11 +41,12 @@ M2 test sequence:
 3. Confirm pose, projection matrix, intrinsics, and frame rate change live.
 4. Center a static, textured object at least 45 cm from the phone. Confirm the live target-distance value is plausible, then select **Start capture**.
 5. Move to the highlighted translucent-globe sector. Movement is navigation only; the app does not expect a sharp keyframe while walking.
-6. Stop briefly and hold the phone steady while the app records a two-frame sharp burst. Wait for the haptic and **SECTOR CAPTURED** confirmation before moving again.
-7. Repeat for the required standard, raised, top, and low checkpoints. Select **Finish scan** when the globe and readiness result show sufficient coverage.
-8. Export the capture for Spirula, LichtFeld, or as a full archive.
-9. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
-10. Reconstruct the images through Spirula native SfM or LichtFeld's COLMAP Reconstruction plugin before training. Do not treat the WebXR transform file as final reconstruction poses.
+6. Keep the object inside the central reticle. If it leaves the locked capture region, the globe fades, the reticle turns red, and capture pauses until the directional prompt is followed.
+7. Stop briefly and hold the phone steady while the app records a two-frame sharp burst. Wait for the haptic and **SECTOR CAPTURED** confirmation before moving again.
+8. Repeat for the required standard, raised, top, and low checkpoints. Select **Finish scan** when the globe and readiness result show sufficient coverage.
+9. Export the capture for Spirula, LichtFeld, or as a full archive.
+10. Inspect `capture.json`, `transforms.json`, `telemetry/frames.jsonl`, `debug/session.jsonl`, sampled `debug/rejected/` quality crops, images, optional depth, and IMU samples.
+11. Reconstruct the images through Spirula native SfM or LichtFeld's COLMAP Reconstruction plugin before training. Do not treat the WebXR transform file as final reconstruction poses.
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
 
@@ -57,7 +62,7 @@ Three export buttons are available:
 - **Spirula ZIP** contains reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. Images are checkpoint-selected when the safety gate passes. The package intentionally omits root reconstruction markers so native SfM runs.
 - **LichtFeld ZIP** contains reconstruction images, provenance, readiness report, and instructions for the `community:colmap` COLMAP Reconstruction plugin (LichtFeld 0.5.0 or newer). Images are checkpoint-selected when the safety gate passes. The package intentionally contains no fabricated COLMAP model.
 
-Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. Each populated globe cell retains at most its ten sharpest stationary images for destination selection, and the recorder stops admitting frames after that cell reaches its limit. A complete 25-checkpoint capture therefore begins at 50 images without growing indefinitely as sectors are revisited. Incomplete but sufficiently distributed captures use the same bounded sector selection; very sparse captures fall back to every image. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
+Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. The recorder may retain up to ten accepted images per populated globe cell in the canonical archive. Destination exports select at most four per cell, reject motion scores above 0.4, and rank the remaining views with the attributed hybrid sharpness metric. A complete 25-checkpoint capture therefore begins at 50 images and is capped at 100 destination images. Incomplete but sufficiently distributed captures use the same bounded sector selection; very sparse captures fall back to every image. Exporting a non-ready capture produces both an interactive warning and a warning in the handoff README. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
 
 Replay the same readiness checks against an existing capture without modifying it:
 

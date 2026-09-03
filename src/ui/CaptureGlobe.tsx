@@ -26,9 +26,11 @@ const LATITUDES: ReadonlyArray<{
 export function CaptureGlobe({
   report,
   pose,
+  framingLost = false,
 }: {
   report: CaptureReadinessReport;
   pose?: Matrix4;
+  framingLost?: boolean;
 }) {
   const cells = report.metrics.coverageCells ?? [];
   const liveOrientation = coverageOrientation(pose, report.metrics.targetEstimate);
@@ -51,7 +53,7 @@ export function CaptureGlobe({
   const marker = project(orientation.longitude, orientation.elevation, orientation);
 
   return (
-    <aside className="capture-globe" aria-label={`${completed} of ${required} capture checkpoints complete`}>
+    <aside className={`capture-globe${framingLost ? " capture-globe-framing-lost" : ""}`} aria-label={`${completed} of ${required} capture checkpoints complete`}>
       <svg viewBox="0 0 200 180" role="img" aria-hidden="true">
         <defs>
           <radialGradient id="globe-glass" cx="38%" cy="30%" r="70%">

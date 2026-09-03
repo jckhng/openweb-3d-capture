@@ -38,6 +38,7 @@ export type CaptureDecisionReason =
   | "tracking"
   | "image-unavailable"
   | "unsynchronized-image"
+  | "off-target"
   | "too-close"
   | "low-texture"
   | "blur"
@@ -61,6 +62,8 @@ export interface CaptureDecision {
   translationNovelty: number;
   rotationNovelty: number;
   targetDistance?: number;
+  targetNdc?: [number, number];
+  targetInFront?: boolean;
   quality: FrameQuality;
 }
 
@@ -199,6 +202,12 @@ export interface CaptureMetadata {
     builtAt: string;
   };
   cameraResolution?: { width: number; height: number };
+  target?: {
+    worldPoint: [number, number, number];
+    distanceMeters: number;
+    source: "depth-center" | "assumed-distance";
+    lockedAt: string;
+  };
   readiness?: CaptureReadinessSummary;
 }
 

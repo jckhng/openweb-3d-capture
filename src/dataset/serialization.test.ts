@@ -4,6 +4,7 @@ import {
   buildDatasetFiles,
   buildExportFiles,
   buildNerfstudioTransforms,
+  selectDestinationImages,
   serializeDecisionsJsonl,
 } from "./serialization";
 
@@ -357,6 +358,7 @@ describe("Nerfstudio serialization", () => {
       expect(manifest).toMatchObject({ profile, finalPoseAuthority: "downstream-sfm" });
       expect(manifest.imageSelection.mode).toBe("all-images-fallback");
       const instructions = files.find((file) => file.path.startsWith("README-"))!.data as string;
+      expect(instructions).toContain("WARNING: capture preflight status is ADD-VIEWS");
       if (profile === "lichtfeld") {
         expect(instructions).toContain("community:colmap");
         expect(instructions).toContain("LichtFeld 0.5.0 or newer");
@@ -481,5 +483,78 @@ describe("Nerfstudio serialization", () => {
       mode: "bounded-sectors",
       selectedImageCount: 20,
     });
+  });
+
+  it("exports at most four low-motion hybrid-ranked frames per populated cell", () => {
+    const frames = Array.from({ length: 30 }, (_, id): CaptureFrame => ({
+      ...frame,
+      id,
+      imagePath: `images/${String(id).padStart(6, "0")}.jpg`,
+      quality: {
+        ...frame.quality,
+        sharpFramesHybridScore: id % 5,
+        motionScore: id % 5 === 0 ? 0.5 : 0.2,
+      },
+    }));
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-curated",
+        createdAt: "2026-09-03T00:00:00.000Z",
+        updatedAt: "2026-09-03T00:00:00.000Z",
+        captureMode: "object",
+        source: "webxr",
+        units: "meters",
+        frameCount: frames.length,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      },
+      frames,
+      decisions: [],
+      imu: [],
+      images: new Map(frames.map((candidate) => [candidate.imagePath!, new Blob(["jpg"])])),
+      depths: new Map(),
+      readiness: {
+        format: "open3dcapture-readiness",
+        version: 1,
+        status: "add-views",
+        primaryAction: "Add views.",
+        generatedAt: "2026-09-03T00:00:00.000Z",
+        metrics: {
+          acceptedFrames: 30,
+          imageFrames: 30,
+          synchronizedImageFrames: 30,
+          synchronizedImageRatio: 1,
+          p10AcceptedSharpness: 1,
+          azimuthBinsCovered: 6,
+          azimuthBinCount: 12,
+          missingAzimuthBins: [6, 7, 8, 9, 10, 11],
+          elevationBandsCovered: ["level"],
+          elevationSpanDegrees: 0,
+          coverageCells: Array.from({ length: 6 }, (_, azimuthBin) => ({
+            azimuthBin,
+            latitude: "level" as const,
+            required: true,
+            frameCount: 5,
+            stableFrameCount: 5,
+            bestSharpness: 1,
+            selectedFrameIds: Array.from({ length: 5 }, (_, offset) => azimuthBin * 5 + offset),
+            state: "captured" as const,
+          })),
+          visualConnectedFrames: 30,
+          visualComponentCount: 1,
+          adjacentEdgeCoverage: 1,
+          loopClosureDetected: false,
+          physicalLoopClosed: false,
+        },
+        issues: [],
+      },
+    };
+
+    const selection = selectDestinationImages(dataset);
+    expect(selection).toMatchObject({ mode: "bounded-sectors", selectedImageCount: 24 });
+    expect(selection.selectedFrameIds.some((id) => id % 5 === 0)).toBe(false);
   });
 });

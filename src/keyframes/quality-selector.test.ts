@@ -48,6 +48,7 @@ describe("QualityKeyframeSelector", () => {
     [{ trackingState: "emulated" }, "tracking"],
     [{ imageAvailable: false }, "image-unavailable"],
     [{ imageSynchronized: false }, "unsynchronized-image"],
+    [{ targetNdc: [0.7, 0] as [number, number] }, "off-target"],
     [{ targetDistance: 0.3 }, "too-close"],
     [{ textureScore: 0.05 }, "low-texture"],
     [{ sharpnessScore: 0.2 }, "blur"],

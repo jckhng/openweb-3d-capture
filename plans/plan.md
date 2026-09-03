@@ -15,6 +15,7 @@ Implemented:
 * Vite, React, TypeScript, PWA manifest, production service worker
 * visible UTC build timestamp persisted into every new capture export
 * first-run capture instructions, supported-platform status, local-data disclosure, free-space status, and persistent-storage request
+* persistent local-device-only disclosure in onboarding and the live capture HUD; no capture upload, cloud sync, accounts, or analytics
 * browser capability probe and live diagnostic UI
 * immersive AR session, pose, projection, intrinsics, frame-rate, IMU, and CPU-depth telemetry
 * 20-frame diagnostic capture with raw-XR-camera readback where granted
@@ -33,6 +34,7 @@ Implemented:
 * compact immersive capture HUD that leaves the camera view unobstructed
 * 3×3 target-region Laplacian sharpness scoring with separate texture confidence
 * attributed Sharp Frames denoised Laplacian–Tenengrad target-tile shadow metric, persisted per candidate without changing the production acceptance gate
+* Start-time world-space target lock with per-frame camera projection, target-following sharpness crop, hard off-target rejection, directional recenter guidance, warning haptic, and coverage-globe suppression when framing is lost
 * desktop quality analysis reporting both score distributions and their rank correlation
 * pose-derived linear/angular motion scoring
 * translation/rotation novelty selection
@@ -84,7 +86,8 @@ Implemented:
 * post-capture `READY FOR SFM | ADD VIEWS | CAPTURE RISK` result
 * separate canonical, Spirula native-SfM, and LichtFeld COLMAP-plugin ZIP profiles
 * destination packages that retain WebXR provenance without root pose/reconstruction markers
-* per-cell capture admission and destination sampling capped at the ten sharpest stationary images; complete and sufficiently distributed incomplete captures remain bounded, while sparse captures fall back to all images
+* per-cell capture admission capped at ten images; destination sampling capped at four images with motion score at most 0.4 and attributed hybrid sharpness ranking; complete and sufficiently distributed incomplete captures remain bounded, while sparse captures fall back to all images
+* explicit UI and handoff-file warnings when Spirula/LichtFeld export is requested below the direct-SfM readiness threshold
 * explicit camera-open step followed by a separate user-triggered capture start
 * save-before-deferred finalization: capture metadata, images, and preliminary readiness become durable before long visual repair begins
 * extracted-directory and ZIP dataset validator with Nerfstudio, image, pose, depth, PLY, and tracking checks
@@ -95,7 +98,7 @@ Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (77 tests)
+npm test        PASS (81 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 

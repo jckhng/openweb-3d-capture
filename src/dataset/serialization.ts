@@ -6,6 +6,7 @@ import type {
   CaptureDecision,
   CaptureFrame,
   CaptureMetadata,
+  CaptureReadinessStatus,
   IMUSample,
 } from "../shared/types";
 
@@ -59,6 +60,8 @@ const MINIMUM_DESTINATION_CHECKPOINT_IMAGES = 50;
 const MINIMUM_DESTINATION_AZIMUTH_BINS = 12;
 const MINIMUM_BOUNDED_SELECTION_IMAGES = 20;
 const MINIMUM_BOUNDED_SELECTION_AZIMUTH_BINS = 6;
+const MAXIMUM_DESTINATION_IMAGES_PER_CELL = 4;
+const MAXIMUM_DESTINATION_MOTION_SCORE = 0.4;
 
 export function buildNerfstudioTransforms(
   frames: CaptureFrame[],
@@ -219,7 +222,7 @@ export function buildExportFiles(
   const files: DatasetFile[] = [
     {
       path: `README-${profile.toUpperCase()}.txt`,
-      data: destinationInstructions(profile, imageSelection),
+      data: destinationInstructions(profile, imageSelection, dataset.readiness?.status),
     },
     {
       path: "open3dcapture/export.json",
@@ -280,8 +283,8 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
       .map((frame) => frame.id),
   );
   const requiredCells = cells.filter((cell) => cell.required && cell.state === "captured");
-  const requiredSelectedIds = selectedIds(requiredCells, availableFrameIds);
-  const requiredAzimuthBins = coveredAzimuthBins(requiredCells, availableFrameIds);
+  const requiredSelectedIds = selectedIds(requiredCells, availableFrameIds, dataset.frames);
+  const requiredAzimuthBins = coveredAzimuthBins(requiredCells, new Set(requiredSelectedIds));
   const requiredCellCount = cells.filter((cell) => cell.required).length;
   const checkpointSetIsSafe = requiredCellCount > 0 && requiredCells.length === requiredCellCount &&
     requiredSelectedIds.length >= MINIMUM_DESTINATION_CHECKPOINT_IMAGES &&
@@ -292,11 +295,11 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
       sourceImageCount: dataset.images.size,
       selectedImageCount: requiredSelectedIds.length,
       selectedFrameIds: requiredSelectedIds,
-      reason: "Selected up to ten sharp, low-motion images per required checkpoint with complete coverage.",
+      reason: "Selected up to four hybrid-ranked images with motion score at most 0.4 per required checkpoint with complete coverage.",
     };
   }
-  const boundedSelectedIds = selectedIds(cells, availableFrameIds);
-  const boundedAzimuthBins = coveredAzimuthBins(cells, availableFrameIds);
+  const boundedSelectedIds = selectedIds(cells, availableFrameIds, dataset.frames);
+  const boundedAzimuthBins = coveredAzimuthBins(cells, new Set(boundedSelectedIds));
   if (
     boundedSelectedIds.length >= MINIMUM_BOUNDED_SELECTION_IMAGES &&
     boundedAzimuthBins >= MINIMUM_BOUNDED_SELECTION_AZIMUTH_BINS
@@ -306,7 +309,7 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
       sourceImageCount: dataset.images.size,
       selectedImageCount: boundedSelectedIds.length,
       selectedFrameIds: boundedSelectedIds,
-      reason: `Coverage is incomplete; selected up to ten sharp, low-motion images per populated sector across ${boundedAzimuthBins} azimuth bins.`,
+      reason: `Coverage is incomplete; selected up to four hybrid-ranked images with motion score at most 0.4 per populated sector across ${boundedAzimuthBins} azimuth bins.`,
     };
   }
   const allFrameIds = dataset.frames
@@ -324,10 +327,32 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
 function selectedIds(
   cells: CaptureCoverageCell[],
   availableFrameIds: ReadonlySet<number>,
+  frames: readonly CaptureFrame[],
 ): number[] {
-  return Array.from(new Set(cells.flatMap((cell) => cell.selectedFrameIds ?? [])))
-    .filter((id) => availableFrameIds.has(id))
+  const frameById = new Map(frames.map((frame) => [frame.id, frame]));
+  return Array.from(new Set(cells.flatMap((cell) => (
+    (cell.selectedFrameIds ?? [])
+      .filter((id) => {
+        const frame = frameById.get(id);
+        return availableFrameIds.has(id) && frame &&
+          frame.quality.motionScore <= MAXIMUM_DESTINATION_MOTION_SCORE;
+      })
+      .sort((leftId, rightId) => compareExportFrames(frameById.get(leftId)!, frameById.get(rightId)!))
+      .slice(0, MAXIMUM_DESTINATION_IMAGES_PER_CELL)
+  ))))
     .sort((left, right) => left - right);
+}
+
+function compareExportFrames(left: CaptureFrame, right: CaptureFrame): number {
+  const leftHybrid = left.quality.sharpFramesHybridScore;
+  const rightHybrid = right.quality.sharpFramesHybridScore;
+  if (Number.isFinite(leftHybrid) && Number.isFinite(rightHybrid) && leftHybrid !== rightHybrid) {
+    return rightHybrid! - leftHybrid!;
+  }
+  const sharpnessDifference = left.quality.blurScore - right.quality.blurScore;
+  if (sharpnessDifference !== 0) return sharpnessDifference;
+  const motionDifference = left.quality.motionScore - right.quality.motionScore;
+  return motionDifference !== 0 ? motionDifference : left.id - right.id;
 }
 
 function coveredAzimuthBins(
@@ -344,14 +369,20 @@ function coveredAzimuthBins(
 function destinationInstructions(
   profile: Exclude<ExportProfile, "canonical">,
   imageSelection: DestinationImageSelection,
+  readinessStatus?: CaptureReadinessStatus,
 ): string {
   const selectionNote = imageSelection.mode === "all-images-fallback"
     ? `The sector sample was too sparse to filter safely, so the images directory contains all ${imageSelection.sourceImageCount} source images.`
     : `The images directory contains ${imageSelection.selectedImageCount} sharp stationary sector frames selected from ${imageSelection.sourceImageCount} source images.`;
+  const readinessWarning = readinessStatus && readinessStatus !== "ready"
+    ? `WARNING: capture preflight status is ${readinessStatus.toUpperCase()}. Review open3dcapture/preflight/readiness.json before reconstruction.`
+    : undefined;
   if (profile === "spirula") {
     return [
       "Open Web 3D Capture — Spirula Studio handoff",
       "",
+      readinessWarning,
+      readinessWarning ? "" : undefined,
       "1. Extract this ZIP.",
       "2. In Spirula Studio choose Create Dataset from Photos/Video.",
       "3. Select the extracted images directory.",
@@ -361,11 +392,13 @@ function destinationInstructions(
       "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
       selectionNote,
       "",
-    ].join("\n");
+    ].filter((line): line is string => line !== undefined).join("\n");
   }
   return [
     "Open Web 3D Capture — LichtFeld Studio handoff",
     "",
+    readinessWarning,
+    readinessWarning ? "" : undefined,
     "1. Extract this ZIP.",
     "2. In LichtFeld Studio's plugin browser, install COLMAP Reconstruction (community:colmap) if it is absent. It requires LichtFeld 0.5.0 or newer.",
     "3. Start the COLMAP Reconstruction plugin.",
@@ -376,5 +409,5 @@ function destinationInstructions(
     "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
     selectionNote,
     "",
-  ].join("\n");
+  ].filter((line): line is string => line !== undefined).join("\n");
 }

@@ -8,6 +8,7 @@ export interface QualitySelectorConfig {
   minimumTexture: number;
   sharpnessHistoryLength: number;
   minimumTargetDistance: number;
+  maximumTargetNdcOffset: number;
   maximumLinearVelocity: number;
   maximumAngularVelocity: number;
   minimumTranslation: number;
@@ -21,6 +22,7 @@ export const DEFAULT_QUALITY_SELECTOR_CONFIG: Readonly<QualitySelectorConfig> = 
   minimumTexture: 0.12,
   sharpnessHistoryLength: 32,
   minimumTargetDistance: 0.45,
+  maximumTargetNdcOffset: 0.55,
   // Replaying the first rigid M2 orbit rejects 33% of candidates at these limits.
   maximumLinearVelocity: 0.4,
   maximumAngularVelocity: 0.45,
@@ -39,6 +41,8 @@ export interface QualityCandidate {
   sharpFramesHybridScore?: number;
   textureScore: number;
   targetDistance?: number;
+  targetNdc?: [number, number];
+  targetInFront?: boolean;
 }
 
 export class QualityKeyframeSelector {
@@ -92,6 +96,8 @@ export class QualityKeyframeSelector {
       translationNovelty: novelty.translation,
       rotationNovelty: novelty.rotation,
       targetDistance: candidate.targetDistance,
+      targetNdc: candidate.targetNdc ? [...candidate.targetNdc] : undefined,
+      targetInFront: candidate.targetInFront,
       quality: {
         blurScore,
         sharpFramesHybridScore: candidate.sharpFramesHybridScore,
@@ -155,6 +161,13 @@ export class QualityKeyframeSelector {
     if (!candidate.imageAvailable) return "image-unavailable";
     if (!candidate.imageSynchronized) return "unsynchronized-image";
     if (
+      candidate.targetInFront === false ||
+      (candidate.targetNdc &&
+      (!candidate.targetNdc.every(Number.isFinite) ||
+        Math.max(Math.abs(candidate.targetNdc[0]), Math.abs(candidate.targetNdc[1])) >
+          this.config.maximumTargetNdcOffset))
+    ) return "off-target";
+    if (
       candidate.targetDistance !== undefined &&
       candidate.targetDistance > 0 &&
       candidate.targetDistance < this.config.minimumTargetDistance
@@ -180,7 +193,12 @@ function validateConfig(config: QualitySelectorConfig): void {
   for (const [name, value] of Object.entries(config)) {
     if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`);
   }
-  if (config.minimumSharpness > 1 || config.maximumAdaptiveSharpness > 1 || config.minimumTexture > 1) {
+  if (
+    config.minimumSharpness > 1 ||
+    config.maximumAdaptiveSharpness > 1 ||
+    config.minimumTexture > 1 ||
+    config.maximumTargetNdcOffset > 1
+  ) {
     throw new Error("Normalized quality thresholds must not exceed 1");
   }
   if (config.maximumAdaptiveSharpness < config.minimumSharpness) {

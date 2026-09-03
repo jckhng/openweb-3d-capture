@@ -3,7 +3,7 @@ import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import type { DiagnosticSnapshot } from "../xr/diagnostic-controller";
 import { XRDiagnosticController } from "../xr/diagnostic-controller";
 import { probeCapabilities } from "../xr/capabilities";
-import type { CapabilityReport, CaptureMetadata, Matrix4 } from "../shared/types";
+import type { CapabilityReport, CaptureMetadata, CaptureReadinessStatus, Matrix4 } from "../shared/types";
 import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
 import { isOpfsSupported } from "../storage/storage";
@@ -38,6 +38,7 @@ export function App() {
   const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus>({});
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const previousCheckpointCount = useRef(0);
+  const previousOffTarget = useRef(false);
   const wakeLockState = useScreenWakeLock(snapshot.running || Boolean(snapshot.captureFinalization));
 
   const refreshCaptures = async () => {
@@ -86,6 +87,14 @@ export function App() {
     previousCheckpointCount.current = completed;
   }, [snapshot.captureId, snapshot.captureReadiness?.metrics.coverageCheckpointsCompleted]);
 
+  useEffect(() => {
+    const offTarget = Boolean(snapshot.captureId && snapshot.targetFraming && !snapshot.targetFraming.centered);
+    if (offTarget && !previousOffTarget.current && "vibrate" in navigator) {
+      navigator.vibrate([90, 50, 90]);
+    }
+    previousOffTarget.current = offTarget;
+  }, [snapshot.captureId, snapshot.targetFraming]);
+
   async function run(label: string, action: () => Promise<void>) {
     setBusy(label);
     setError(undefined);
@@ -103,7 +112,19 @@ export function App() {
     setError(caught instanceof Error ? caught.message : String(caught));
   }
 
-  async function downloadCapture(profile: ExportProfile, captureId?: string) {
+  async function downloadCapture(
+    profile: ExportProfile,
+    captureId?: string,
+    readinessStatus?: CaptureReadinessStatus,
+  ) {
+    if (
+      profile !== "canonical" &&
+      readinessStatus &&
+      readinessStatus !== "ready" &&
+      !window.confirm(
+        `This capture is ${readinessLabel(readinessStatus)}, not READY FOR SFM. Export anyway?`,
+      )
+    ) return;
     const exported = captureId
       ? await controller.exportCapture(captureId, profile)
       : await controller.exportLastCapture(profile);
@@ -175,7 +196,8 @@ export function App() {
             <li>Move to the highlighted cell, stop, and wait for the orange confirmation before moving again.</li>
           </ol>
           <p className="privacy-note">
-            Local-only: photos and sensor data remain in this browser until you export or delete them. Review captures before sharing because backgrounds may contain private information.
+            <strong>Local browser only — no capture uploads.</strong>{" "}
+            Photos, depth, motion, poses, and diagnostics stay in browser storage on this device. The app has no cloud sync or analytics. Data leaves the device only when you export a ZIP and choose to share it. Backgrounds may contain private information.
           </p>
           <dl className="rollout-status">
             <Metric label="local storage" value={store.kind === "opfs" ? "available" : "not persistent"} />
@@ -193,14 +215,25 @@ export function App() {
       ) : null}
 
       {snapshot.running ? (
-        <div className={`reticle ${qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
+        <div className={`reticle ${snapshot.targetFraming && !snapshot.targetFraming.centered ? "quality-off-target" : qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
+      ) : null}
+
+      {snapshot.captureId && snapshot.targetFraming && !snapshot.targetFraming.centered ? (
+        <div className="target-warning" role="status">
+          {targetDirection(snapshot.targetFraming.ndc)} — RE-CENTER OBJECT
+        </div>
       ) : null}
 
       {snapshot.captureId && snapshot.captureReadiness ? (
-        <CaptureGlobe report={snapshot.captureReadiness} pose={snapshot.pose} />
+        <CaptureGlobe
+          report={snapshot.captureReadiness}
+          pose={snapshot.pose}
+          framingLost={Boolean(snapshot.targetFraming && !snapshot.targetFraming.centered)}
+        />
       ) : null}
 
       <section className="capture-panel" aria-label="Capture controls">
+        <p className="local-data-status">LOCAL DEVICE ONLY · NO CAPTURE UPLOADS</p>
         <p className="build-id">
           Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
         </p>
@@ -262,13 +295,13 @@ export function App() {
               <button
                 className="primary"
                 disabled={Boolean(busy)}
-                onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula"))}
+                onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula", undefined, snapshot.lastReadiness?.status))}
               >
                 Export to Spirula
               </button>
               <button
                 disabled={Boolean(busy)}
-                onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld"))}
+                onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld", undefined, snapshot.lastReadiness?.status))}
               >
                 Export to LichtFeld
               </button>
@@ -374,6 +407,7 @@ export function App() {
           <Metric label="rejected tracking" value={snapshot.captureQuality.rejectedTracking} />
           <Metric label="rejected image" value={snapshot.captureQuality.rejectedImage} />
           <Metric label="rejected too close" value={snapshot.captureQuality.rejectedTooClose} />
+          <Metric label="rejected off target" value={snapshot.captureQuality.rejectedOffTarget} />
           <Metric label="sharpness" value={formatPercent(snapshot.captureQuality.sharpnessScore)} />
           <Metric
             label="Sharp Frames shadow score"
@@ -508,13 +542,13 @@ export function App() {
                   </button>
                   <button
                     disabled={Boolean(busy)}
-                    onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula", capture.captureId))}
+                    onClick={() => void run("exporting for Spirula", () => downloadCapture("spirula", capture.captureId, capture.readiness?.status))}
                   >
                     Spirula
                   </button>
                   <button
                     disabled={Boolean(busy)}
-                    onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld", capture.captureId))}
+                    onClick={() => void run("exporting for LichtFeld", () => downloadCapture("lichtfeld", capture.captureId, capture.readiness?.status))}
                   >
                     LichtFeld
                   </button>
@@ -745,6 +779,9 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
     ) return "MOVE FARTHER — fixed-focus WebXR is unreliable at this distance.";
     return `XR is ready. Center the object at least ${MINIMUM_TARGET_DISTANCE_CM} cm away, then start capture.`;
   }
+  if (snapshot.targetFraming && !snapshot.targetFraming.centered) {
+    return `${targetDirection(snapshot.targetFraming.ndc)} — RE-CENTER OBJECT; capture is paused.`;
+  }
   switch (snapshot.captureQuality.lastDecision) {
     case "accepted":
     case "checkpoint-burst":
@@ -755,6 +792,8 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
       return "AIM AT MORE DETAIL — keep the object centered with visible edges or texture.";
     case "too-close":
       return `MOVE FARTHER — fixed-focus WebXR is unreliable below ${MINIMUM_TARGET_DISTANCE_CM} cm.`;
+    case "off-target":
+      return "RE-CENTER OBJECT — capture is paused.";
     case "motion":
       return "MOVE TO THE NEXT SECTOR, THEN STOP — sharp frames are captured while stationary.";
     case "redundant":
@@ -762,7 +801,7 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
         ? "SECTOR CAPTURED — move to the highlighted unlit sector."
         : "HOLD STEADY — waiting for a sharp checkpoint burst.";
     case "sector-full":
-      return "SECTOR FULL — ten sharp images retained; move to the highlighted sector.";
+      return "SECTOR FULL — move to the highlighted sector.";
     case "tracking":
       return "TRACKING LOST — aim at a detailed, well-lit area.";
     case "image-unavailable":
@@ -771,6 +810,12 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
     default:
       return "Hold steady while the first frame is evaluated.";
   }
+}
+
+function targetDirection([x, y]: [number, number]): string {
+  const horizontal = x > 0.18 ? "RIGHT" : x < -0.18 ? "LEFT" : "";
+  const vertical = y > 0.18 ? "UP" : y < -0.18 ? "DOWN" : "";
+  return `AIM ${[vertical, horizontal].filter(Boolean).join(" ") || "AT CENTER"}`;
 }
 
 function checkpointInstruction(report?: CaptureReadinessReport): string {

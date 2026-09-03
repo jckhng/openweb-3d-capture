@@ -32,6 +32,8 @@ import type { CapturePersistence } from "../storage/storage";
 import { IMUSensorRecorder } from "./imu";
 
 const REJECTED_PREVIEW_INTERVAL = 4;
+const ASSUMED_TARGET_DISTANCE_METERS = 1;
+const TARGET_NDC_OFFSET_LIMIT = DEFAULT_QUALITY_SELECTOR_CONFIG.maximumTargetNdcOffset;
 
 interface XRViewWithCamera extends XRView {
   camera?: {
@@ -51,6 +53,7 @@ interface XRWebGLBindingLike {
 interface ActiveCapture {
   id: string;
   target?: number;
+  targetPoint?: [number, number, number];
   frames: number;
   candidates: number;
   metadata: CaptureMetadata;
@@ -76,6 +79,13 @@ interface CandidateFrameInput {
   trackingState: string;
   depth: DepthCapture | null;
   view: XRViewWithCamera;
+  targetFraming?: TargetFraming;
+}
+
+export interface TargetFraming {
+  ndc: [number, number];
+  inFront: boolean;
+  centered: boolean;
 }
 
 export interface CaptureQualityTelemetry {
@@ -88,6 +98,7 @@ export interface CaptureQualityTelemetry {
   rejectedTracking: number;
   rejectedImage: number;
   rejectedTooClose: number;
+  rejectedOffTarget: number;
   sharpnessScore: number;
   sharpFramesHybridScore: number;
   sharpnessThreshold: number;
@@ -113,6 +124,7 @@ export interface DiagnosticSnapshot {
   depthResolution?: { width: number; height: number };
   depthScale?: number;
   targetDistance?: number;
+  targetFraming?: TargetFraming;
   imuSampleRate: number;
   imuStatus: string;
   captureId?: string;
@@ -212,6 +224,9 @@ export class XRDiagnosticController {
       intrinsics: this.snapshot.intrinsics ? { ...this.snapshot.intrinsics } : undefined,
       cameraResolution: this.snapshot.cameraResolution ? { ...this.snapshot.cameraResolution } : undefined,
       depthResolution: this.snapshot.depthResolution ? { ...this.snapshot.depthResolution } : undefined,
+      targetFraming: this.snapshot.targetFraming
+        ? { ...this.snapshot.targetFraming, ndc: [...this.snapshot.targetFraming.ndc] }
+        : undefined,
     };
   }
 
@@ -319,6 +334,14 @@ export class XRDiagnosticController {
     if (this.activeCapture) throw new Error("A capture is already running");
 
     const now = new Date().toISOString();
+    const targetLock = captureMode === "object" ? lockTarget(
+      this.snapshot.pose,
+      this.snapshot.targetDistance,
+      now,
+    ) : undefined;
+    if (captureMode === "object" && !targetLock) {
+      throw new Error("Wait for stable XR tracking before starting capture");
+    }
     const metadata: CaptureMetadata = {
       format: "open3dcapture",
       version: 1,
@@ -333,11 +356,13 @@ export class XRDiagnosticController {
       hasImu: false,
       status: "incomplete",
       applicationBuild: { builtAt: BUILD_TIMESTAMP },
+      target: targetLock,
     };
     await this.persistence.createCapture(metadata);
     this.activeCapture = {
       id: metadata.captureId,
       target,
+      targetPoint: targetLock?.worldPoint,
       frames: 0,
       candidates: 0,
       metadata,
@@ -357,6 +382,9 @@ export class XRDiagnosticController {
     this.snapshot.captureReadiness = undefined;
     this.snapshot.lastReadiness = undefined;
     this.snapshot.captureFinalization = undefined;
+    this.snapshot.targetFraming = targetLock && this.snapshot.pose && this.snapshot.projectionMatrix
+      ? projectTarget(targetLock.worldPoint, this.snapshot.pose, this.snapshot.projectionMatrix)
+      : undefined;
     this.visualTracker.reset();
     this.snapshot.lastError = undefined;
     this.emit();
@@ -369,7 +397,10 @@ export class XRDiagnosticController {
     const captureId = this.lastCaptureId ?? this.activeCapture?.id;
     if (!captureId) throw new Error("No capture is available to export");
     const dataset = await this.persistence.loadCapture(captureId);
-    dataset.readiness ??= analyzeCaptureReadiness(dataset);
+    dataset.readiness ??= analyzeCaptureReadiness({
+      ...dataset,
+      targetEstimate: dataset.capture.target?.worldPoint,
+    });
     return {
       blob: await exportDatasetZip(dataset, profile),
       filename: exportFilename(captureId, profile),
@@ -381,7 +412,10 @@ export class XRDiagnosticController {
     profile: ExportProfile = "canonical",
   ): Promise<{ blob: Blob; filename: string }> {
     const dataset = await this.persistence.loadCapture(captureId);
-    dataset.readiness ??= analyzeCaptureReadiness(dataset);
+    dataset.readiness ??= analyzeCaptureReadiness({
+      ...dataset,
+      targetEstimate: dataset.capture.target?.worldPoint,
+    });
     return {
       blob: await exportDatasetZip(dataset, profile),
       filename: exportFilename(captureId, profile),
@@ -452,6 +486,10 @@ export class XRDiagnosticController {
     this.snapshot.trackingState = pose.emulatedPosition ? "emulated" : "tracked";
 
     const active = this.activeCapture;
+    const targetFraming = active?.targetPoint
+      ? projectTarget(active.targetPoint, cameraToWorld, projectionMatrix)
+      : undefined;
+    this.snapshot.targetFraming = targetFraming;
     const belowTarget = active?.target === undefined || active.frames < active.target;
     if (
       active &&
@@ -471,6 +509,7 @@ export class XRDiagnosticController {
         trackingState: this.snapshot.trackingState,
         depth,
         view,
+        targetFraming,
       }).catch((error: unknown) => {
         this.snapshot.lastError = error instanceof Error ? error.message : "Frame persistence failed";
       }).finally(() => {
@@ -487,7 +526,7 @@ export class XRDiagnosticController {
     if (!active) return;
     const candidateId = active.candidates;
     active.candidates += 1;
-    const image = await this.readCameraImage(input.view);
+    const image = await this.readCameraImage(input.view, input.targetFraming?.ndc);
     let decision: CaptureDecision | undefined;
     if (active.selector) {
       decision = active.selector.evaluate({
@@ -501,6 +540,8 @@ export class XRDiagnosticController {
         sharpFramesHybridScore: image?.sharpFramesHybridScore,
         textureScore: image?.textureScore ?? 0,
         targetDistance: input.depth?.targetDistance,
+        targetNdc: input.targetFraming?.ndc,
+        targetInFront: input.targetFraming?.inFront,
       });
       decision = active.checkpointBurst?.evaluate(decision) ?? decision;
       decision = this.enforceCoverageCellLimit(decision);
@@ -613,6 +654,7 @@ export class XRDiagnosticController {
 
     telemetry.rejected += 1;
     if (decision.reason === "blur") telemetry.rejectedBlur += 1;
+    else if (decision.reason === "off-target") telemetry.rejectedOffTarget += 1;
     else if (decision.reason === "low-texture") telemetry.rejectedLowTexture += 1;
     else if (decision.reason === "too-close") telemetry.rejectedTooClose += 1;
     else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
@@ -659,7 +701,10 @@ export class XRDiagnosticController {
     }
   }
 
-  private async readCameraImage(view: XRViewWithCamera): Promise<CapturedImage | null> {
+  private async readCameraImage(
+    view: XRViewWithCamera,
+    targetNdc?: [number, number],
+  ): Promise<CapturedImage | null> {
     const camera = view.camera;
     if (camera && this.binding && this.gl) {
       try {
@@ -702,7 +747,7 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.putImageData(imageData, 0, 0);
-        const quality = this.measureImageQuality(canvas, width, height);
+        const quality = this.measureImageQuality(canvas, width, height, targetNdc);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
         if (blob) return { blob, width, height, source: "xr-camera", ...quality };
       } catch {
@@ -718,7 +763,7 @@ export class XRDiagnosticController {
         canvas.width = width;
         canvas.height = height;
         canvas.getContext("2d")?.drawImage(this.rawVideo, 0, 0, width, height);
-        const quality = this.measureImageQuality(canvas, width, height);
+        const quality = this.measureImageQuality(canvas, width, height, targetNdc);
         const blob = await canvasToBlob(canvas, "image/jpeg", 0.92);
         return blob ? { blob, width, height, source: "media-stream", ...quality } : null;
       }
@@ -730,12 +775,15 @@ export class XRDiagnosticController {
     source: CanvasImageSource,
     width: number,
     height: number,
+    targetNdc?: [number, number],
   ): { sharpnessScore: number; textureScore: number; sharpFramesHybridScore: number } {
     const context = this.qualityCanvas.getContext("2d", { willReadFrequently: true });
     if (!context) return { sharpnessScore: 0, textureScore: 0, sharpFramesHybridScore: 0 };
     const cropSize = Math.max(1, Math.floor(Math.min(width, height) * 0.6));
-    const sourceX = Math.floor((width - cropSize) / 2);
-    const sourceY = Math.floor((height - cropSize) / 2);
+    const targetX = targetNdc ? (targetNdc[0] * 0.5 + 0.5) * width : width / 2;
+    const targetY = targetNdc ? (0.5 - targetNdc[1] * 0.5) * height : height / 2;
+    const sourceX = Math.round(Math.max(0, Math.min(width - cropSize, targetX - cropSize / 2)));
+    const sourceY = Math.round(Math.max(0, Math.min(height - cropSize, targetY - cropSize / 2)));
     context.drawImage(
       source,
       sourceX,
@@ -850,6 +898,7 @@ export class XRDiagnosticController {
       frames: active.readinessFrames,
       decisions: active.readinessDecisions,
       visualTracking: this.snapshot.visualTracking,
+      targetEstimate: active.targetPoint,
     });
     await this.persistence.saveCaptureReadiness(active.id, preliminaryReadiness);
     const finalizedMetadata: CaptureMetadata = {
@@ -874,6 +923,7 @@ export class XRDiagnosticController {
           frames: active.readinessFrames,
           decisions: active.readinessDecisions,
           visualTracking,
+          targetEstimate: active.targetPoint,
         });
         await this.persistence.saveCaptureReadiness(active.id, finalReadiness);
         finalizedMetadata.readiness = summarizeCaptureReadiness(finalReadiness);
@@ -908,6 +958,7 @@ export class XRDiagnosticController {
     this.snapshot.captureMode = undefined;
     this.snapshot.captureReadiness = undefined;
     this.snapshot.captureFinalization = "saved";
+    this.snapshot.targetFraming = undefined;
     this.emit();
   }
 
@@ -918,6 +969,7 @@ export class XRDiagnosticController {
       frames: active.readinessFrames,
       decisions: active.readinessDecisions,
       visualTracking,
+      targetEstimate: active.targetPoint,
     });
   }
 
@@ -962,6 +1014,7 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
     rejectedTracking: 0,
     rejectedImage: 0,
     rejectedTooClose: 0,
+    rejectedOffTarget: 0,
     sharpnessScore: 0,
     sharpFramesHybridScore: 0,
     sharpnessThreshold: DEFAULT_QUALITY_SELECTOR_CONFIG.minimumSharpness,
@@ -976,6 +1029,59 @@ function createQualityTelemetry(): CaptureQualityTelemetry {
 
 function emptyFrameQuality(): CaptureFrame["quality"] {
   return { blurScore: 0, motionScore: 0, noveltyScore: 0, coverageGain: 0 };
+}
+
+function lockTarget(
+  cameraToWorld: Matrix4 | undefined,
+  measuredDistance: number | undefined,
+  lockedAt: string,
+): NonNullable<CaptureMetadata["target"]> | undefined {
+  if (!cameraToWorld || cameraToWorld.length < 3 || cameraToWorld.some((row) => row.length < 4)) {
+    return undefined;
+  }
+  const values = cameraToWorld.slice(0, 3).flatMap((row) => row.slice(0, 4));
+  if (!values.every(Number.isFinite)) return undefined;
+  const distanceMeters = measuredDistance && measuredDistance >= 0.1 && measuredDistance <= 10
+    ? measuredDistance
+    : ASSUMED_TARGET_DISTANCE_METERS;
+  const worldPoint: [number, number, number] = [
+    cameraToWorld[0][3] - cameraToWorld[0][2] * distanceMeters,
+    cameraToWorld[1][3] - cameraToWorld[1][2] * distanceMeters,
+    cameraToWorld[2][3] - cameraToWorld[2][2] * distanceMeters,
+  ];
+  return {
+    worldPoint,
+    distanceMeters,
+    source: measuredDistance && measuredDistance >= 0.1 && measuredDistance <= 10
+      ? "depth-center"
+      : "assumed-distance",
+    lockedAt,
+  };
+}
+
+export function projectTarget(
+  worldPoint: [number, number, number],
+  cameraToWorld: Matrix4,
+  projection: ArrayLike<number>,
+): TargetFraming {
+  const delta = [
+    worldPoint[0] - cameraToWorld[0][3],
+    worldPoint[1] - cameraToWorld[1][3],
+    worldPoint[2] - cameraToWorld[2][3],
+  ];
+  const cameraX = delta[0] * cameraToWorld[0][0] + delta[1] * cameraToWorld[1][0] + delta[2] * cameraToWorld[2][0];
+  const cameraY = delta[0] * cameraToWorld[0][1] + delta[1] * cameraToWorld[1][1] + delta[2] * cameraToWorld[2][1];
+  const cameraZ = delta[0] * cameraToWorld[0][2] + delta[1] * cameraToWorld[1][2] + delta[2] * cameraToWorld[2][2];
+  const clipX = projection[0] * cameraX + projection[4] * cameraY + projection[8] * cameraZ + projection[12];
+  const clipY = projection[1] * cameraX + projection[5] * cameraY + projection[9] * cameraZ + projection[13];
+  const clipW = projection[3] * cameraX + projection[7] * cameraY + projection[11] * cameraZ + projection[15];
+  const inFront = cameraZ < 0 && clipW > 0;
+  const ndc: [number, number] = clipW !== 0 && Number.isFinite(clipW)
+    ? [clipX / clipW, clipY / clipW]
+    : [2, 2];
+  const centered = inFront && ndc.every(Number.isFinite) &&
+    Math.max(Math.abs(ndc[0]), Math.abs(ndc[1])) <= TARGET_NDC_OFFSET_LIMIT;
+  return { ndc, inFront, centered };
 }
 
 function scaleIntrinsics(
