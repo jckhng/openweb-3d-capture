@@ -581,7 +581,12 @@ export function App() {
       </section>
 
       <footer className="app-footer">
-        <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">Third-party notices</a>
+        <p>Copyright © 2026 Open Web 3D Capture contributors. No warranty. You may redistribute this software under GPL-3.0-or-later.</p>
+        <nav aria-label="Legal and source links">
+          <a href="https://github.com/jckhng/openweb-3d-capture" target="_blank" rel="noreferrer">Source code</a>
+          <a href="https://github.com/jckhng/openweb-3d-capture/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
+          <a href="/THIRD_PARTY_NOTICES.txt" target="_blank" rel="noreferrer">Third-party notices</a>
+        </nav>
       </footer>
     </main>
   );

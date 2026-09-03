@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible problem without publishing private capture data
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach capture ZIPs, photos, point clouds, debug crops, or unredacted reports. They can expose people, locations, and personal data. Use a minimal synthetic reproduction or arrange a private transfer with the maintainer.
+  - type: input
+    id: build
+    attributes:
+      label: Build timestamp or commit
+      description: Copy the build timestamp shown below the application title, or provide a commit hash.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Device and browser
+      description: Device model, OS version, browser name, and browser version.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: State what happened and whether data was lost or exposed.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the smallest sequence that reproduces the problem without private data.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Safe diagnostics
+      description: Paste only non-sensitive readiness summaries, error text, and capability status. Redact paths and identifiers.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I have not attached private capture data or unredacted personal information.
+          required: true

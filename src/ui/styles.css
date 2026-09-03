@@ -55,6 +55,8 @@ section {
 .storage-warning { margin: 0.75rem 0 0; color: #fde68a; }
 .tester-panel p { color: #cbd5e1; line-height: 1.45; }
 .app-footer { margin-top: 1rem; text-align: center; }
+.app-footer p { margin: 0 0 0.45rem; color: #94a3b8; font-size: 0.75rem; }
+.app-footer nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem 1rem; }
 .app-footer a { color: #7dd3fc; font-size: 0.8rem; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }

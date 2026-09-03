@@ -199,3 +199,13 @@ The capture HUD shows the UTC production build time. New captures also persist i
 - A depth-derived seed point cloud is generated during ZIP export. Direct Spirula Studio import and training have been confirmed; raw WebXR pose registration still produces low-quality geometry and requires downstream SfM/refinement.
 
 See [plans/plan.md](plans/plan.md) for project sequencing and [docs/m0-compatibility.md](docs/m0-compatibility.md) for API behavior.
+
+## License and independence
+
+Copyright © 2026 Open Web 3D Capture contributors.
+
+Open Web 3D Capture is licensed under the [GNU General Public License version 3 or later](LICENSE). Third-party components and adapted code retain their own licenses; see the [third-party notices](public/THIRD_PARTY_NOTICES.txt).
+
+This is an independent community project. It is not affiliated with or endorsed by Google, ARCore, Spirula Studio, LichtFeld Studio, COLMAP, or Nerfstudio. Product and project names are used only to describe compatibility.
+
+Before contributing or reporting a problem, read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [PRIVACY.md](PRIVACY.md). Do not post capture ZIPs or photos publicly unless every depicted person, location, object, and embedded datum is safe to disclose.
