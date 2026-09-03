@@ -101,14 +101,18 @@ Implemented:
 * preview-motion settling followed by an up-to-three-photo full-resolution burst; only the sharpest acceptable center-target image is retained
 * immediate OPFS persistence with focus, exposure, sharpness, texture, burst-selection, and explicit unposed metadata
 * separate `photo-sfm` capture schema and Spirula/LichtFeld exports that contain no fabricated or stale WebXR transforms
-* count-guided 50-view level/raised/low/detail/top workflow; its coverage is explicitly not pose-measured
+* count-guided 50-view, 25-checkpoint level/raised/top/low globe workflow; its coverage is explicitly not pose-measured
+* autofocus move → ready → focus → settle → burst → select → overlap → save state machine with reticle progress, haptic accept/reject feedback, and last-winner preview
+* optional automatic autofocus capture after detected movement followed by a stable, sharp, textured preview
+* local BRIEF feature matching against accepted photographs to reject near-duplicate views and weak-overlap jumps without fabricating camera poses
+* device-orientation-responsive autofocus globe presentation; it remains a manual guide and is not exported as pose or measured coverage
 * landscape capture HUDs moved into a narrow right-side rail so WebXR and autofocus controls do not obscure the central subject
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (87 tests)
+npm test        PASS (90 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -809,11 +813,13 @@ Properties:
 * requests supported continuous or single-shot autofocus and center metering
 * waits for a stable preview, captures up to three full-resolution photographs, and keeps the sharpest acceptable result
 * records available focus/exposure settings and rejects motion, low-detail, and soft results
-* uses count-based orbit prompts because no pose is available to measure coverage or viewpoint diversity
+* uses the same 25-checkpoint translucent globe as a manual, device-orientation-responsive navigation sequence because no pose is available to measure coverage
+* separates movement from acquisition with live move/hold/focus/burst/select/check/save feedback, optional automatic capture, haptics, and retained-winner confirmation
+* rejects visually near-duplicate photographs and low-overlap jumps using local feature matching and normalized feature displacement; this is an image heuristic, not pose recovery or proof of geometric coverage
 
 This is preferable to attaching stale or guessed WebXR transforms to autofocus images.
 
-Status: implemented in the web application and covered by archive/export validation tests. Target-phone autofocus behavior, threshold calibration, memory pressure, true still resolution, minimum usable distance, 50-view capture ergonomics, and downstream Spirula/LichtFeld reconstruction remain unvalidated.
+Status: implemented in the web application and covered by 90 automated tests. Target-phone autofocus behavior, automatic-capture timing, feature-overlap threshold calibration, memory pressure, true still resolution, minimum usable distance, 50-view capture ergonomics, and downstream Spirula/LichtFeld reconstruction remain unvalidated.
 
 ### WebXR plus browser autofocus hybrid — experimental only
 

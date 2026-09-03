@@ -134,6 +134,13 @@ export interface UnposedPhoto {
     selectedBurstIndex: number;
     focusPoint?: [number, number];
   };
+  visualGuidance?: {
+    verdict: "first" | "useful";
+    matches: number;
+    matchRatio: number;
+    medianDisplacement: number;
+    referencePhotoId?: number;
+  };
 }
 
 export interface IMUSample {

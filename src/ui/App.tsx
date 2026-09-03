@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import type { DiagnosticSnapshot } from "../xr/diagnostic-controller";
 import { XRDiagnosticController } from "../xr/diagnostic-controller";
@@ -17,6 +17,7 @@ import type { CaptureReadinessReport } from "../shared/types";
 import type { ExportProfile } from "../dataset/zip";
 import { CaptureGlobe } from "./CaptureGlobe";
 import { useScreenWakeLock } from "./use-screen-wake-lock";
+import { PhotoCaptureGlobe } from "./PhotoCaptureGlobe";
 import {
   PhotoCaptureController,
   type PhotoCaptureSnapshot,
@@ -263,7 +264,30 @@ export function App() {
         aria-label="Autofocus camera preview"
       />
 
-      {photoActive ? <div className="photo-reticle" aria-hidden="true" /> : null}
+      {photoActive && photoSnapshot.captureId ? (
+        <PhotoCaptureGlobe
+          photoCount={photoSnapshot.photoCount}
+          overlap={photoSnapshot.lastOverlap}
+        />
+      ) : null}
+
+      {photoActive ? (
+        <div
+          className={`photo-reticle photo-stage-${photoSnapshot.stage}`}
+          style={{ "--photo-stage-progress": `${photoSnapshot.stageProgress * 360}deg` } as CSSProperties}
+          aria-hidden="true"
+        >
+          <span className="photo-reticle-progress" />
+          <strong>{photoStageLabel(photoSnapshot)}</strong>
+        </div>
+      ) : null}
+
+      {photoActive && photoSnapshot.lastPhotoPreviewUrl ? (
+        <figure className="photo-winner-preview">
+          <img src={photoSnapshot.lastPhotoPreviewUrl} alt="Sharpest photograph retained from the last burst" />
+          <figcaption>saved winner</figcaption>
+        </figure>
+      ) : null}
 
       {snapshot.running ? (
         <div className={`reticle ${snapshot.targetFraming && !snapshot.targetFraming.centered ? "quality-off-target" : qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
@@ -291,6 +315,7 @@ export function App() {
           storageAvailable={store.kind === "opfs"}
           onStart={() => void run("starting autofocus photo scan", startPhotoCapture)}
           onCapture={() => void run("capturing sharp photo burst", () => photoController.capturePhoto())}
+          onAutomaticChange={(enabled) => photoController.setAutomaticCapture(enabled)}
           onFinish={() => void run("saving autofocus photo scan", async () => {
             await photoController.finishCapture();
             await refreshCaptures();
@@ -697,6 +722,7 @@ function PhotoCapturePanel({
   storageAvailable,
   onStart,
   onCapture,
+  onAutomaticChange,
   onFinish,
   onClose,
 }: {
@@ -705,6 +731,7 @@ function PhotoCapturePanel({
   storageAvailable: boolean;
   onStart: () => void;
   onCapture: () => void;
+  onAutomaticChange: (enabled: boolean) => void;
   onFinish: () => void;
   onClose: () => void;
 }) {
@@ -717,7 +744,10 @@ function PhotoCapturePanel({
       </p>
       <div className="capture-status">
         <div><span>saved views</span><strong>{snapshot.photoCount}/{snapshot.target}</strong></div>
-        <div><span>focus</span><strong>{snapshot.focusMode}</strong></div>
+        <div>
+          <span>camera</span>
+          <strong>{snapshot.liveQuality?.ready ? "ready" : snapshot.stage === "move" ? "moving" : snapshot.stage}</strong>
+        </div>
         <div>
           <span>sharpness</span>
           <strong>{snapshot.lastQuality ? formatPercent(snapshot.lastQuality.sharpnessScore) : "—"}</strong>
@@ -739,7 +769,15 @@ function PhotoCapturePanel({
         ) : (
           <>
             <button className="primary photo-shutter" disabled={Boolean(busy) || capturing} onClick={onCapture}>
-              {capturing ? "Capturing…" : "Capture this view"}
+              {capturing ? "Capturing…" : "Arm this viewpoint"}
+            </button>
+            <button
+              className={snapshot.automaticCapture ? "automatic-enabled" : undefined}
+              disabled={Boolean(busy) || capturing}
+              aria-pressed={snapshot.automaticCapture}
+              onClick={() => onAutomaticChange(!snapshot.automaticCapture)}
+            >
+              Auto capture: {snapshot.automaticCapture ? "on" : "off"}
             </button>
             <button disabled={Boolean(busy) || capturing} onClick={onFinish}>
               Finish photo set
@@ -752,6 +790,17 @@ function PhotoCapturePanel({
       </div>
     </section>
   );
+}
+
+function photoStageLabel(snapshot: PhotoCaptureSnapshot): string {
+  if (snapshot.stage === "burst") return `${snapshot.burstFrame}/3`;
+  if (snapshot.stage === "saved") return "SAVED";
+  if (snapshot.stage === "rejected") return "RETRY";
+  if (snapshot.stage === "ready") return "READY";
+  if (snapshot.stage === "focusing") return "FOCUS";
+  if (snapshot.stage === "settling") return "HOLD";
+  if (snapshot.stage === "selecting" || snapshot.stage === "overlap" || snapshot.stage === "saving") return "CHECK";
+  return snapshot.captureId ? "MOVE" : "CENTER";
 }
 
 function CapabilityGrid({ report }: { report?: CapabilityReport }) {

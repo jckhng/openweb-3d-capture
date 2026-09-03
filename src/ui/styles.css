@@ -188,6 +188,89 @@ main.photo-active .photo-reticle::after {
 main.photo-active .photo-reticle::before { width: 1.2rem; height: 1px; }
 main.photo-active .photo-reticle::after { width: 1px; height: 1.2rem; }
 
+main.photo-active .photo-reticle-progress {
+  position: absolute;
+  inset: -0.45rem;
+  border-radius: 50%;
+  background: conic-gradient(#38bdf8 var(--photo-stage-progress, 0deg), transparent 0);
+  opacity: 0.9;
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 0.26rem), #000 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 0.26rem), #000 0);
+}
+
+main.photo-active .photo-reticle strong {
+  position: absolute;
+  bottom: -2.1rem;
+  left: 50%;
+  min-width: 4.8rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid rgb(125 211 252 / 65%);
+  border-radius: 999px;
+  background: rgb(2 6 23 / 76%);
+  color: #e0f2fe;
+  font-size: 0.68rem;
+  letter-spacing: 0.09em;
+  text-align: center;
+  translate: -50% 0;
+}
+
+main.photo-active .photo-stage-ready { border-color: #86efac; box-shadow: 0 0 1.4rem rgb(134 239 172 / 35%); }
+main.photo-active .photo-stage-ready .photo-reticle-progress { background: conic-gradient(#4ade80 360deg, transparent 0); }
+main.photo-active .photo-stage-saved { border-color: #fb923c; animation: photo-confirm 440ms ease-out; }
+main.photo-active .photo-stage-saved .photo-reticle-progress { background: conic-gradient(#fb923c 360deg, transparent 0); }
+main.photo-active .photo-stage-rejected { border-color: #fb7185; }
+main.photo-active .photo-stage-focusing,
+main.photo-active .photo-stage-settling,
+main.photo-active .photo-stage-burst,
+main.photo-active .photo-stage-selecting,
+main.photo-active .photo-stage-overlap,
+main.photo-active .photo-stage-saving { animation: photo-working 820ms ease-in-out infinite alternate; }
+
+.photo-capture-globe .capture-globe {
+  position: fixed;
+  top: max(0.65rem, env(safe-area-inset-top));
+  right: max(0.65rem, env(safe-area-inset-right));
+  z-index: 2;
+  width: min(38vw, 11rem);
+  margin: 0;
+  padding: 0.35rem;
+  pointer-events: none;
+  background: rgb(2 6 23 / 24%);
+}
+
+.photo-capture-globe .capture-globe-status { gap: 0.3rem; }
+.photo-capture-globe .capture-globe-status strong { font-size: 0.82rem; }
+.photo-capture-globe .capture-globe-status span { max-width: 7.8rem; font-size: 0.5rem; }
+
+.photo-winner-preview {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 3;
+  width: 4.6rem;
+  margin: 0;
+  overflow: hidden;
+  border: 2px solid #fb923c;
+  border-radius: 0.55rem;
+  background: rgb(2 6 23 / 78%);
+  box-shadow: 0 0.5rem 1.5rem rgb(2 6 23 / 50%);
+  pointer-events: none;
+}
+
+.photo-winner-preview img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.photo-winner-preview figcaption { padding: 0.2rem; color: #fed7aa; font-size: 0.48rem; text-align: center; text-transform: uppercase; }
+.automatic-enabled { color: #052e16; background: #86efac; border-color: #4ade80; }
+
+@keyframes photo-working {
+  from { box-shadow: 0 0 0.35rem rgb(56 189 248 / 25%); }
+  to { box-shadow: 0 0 1.4rem rgb(56 189 248 / 55%); }
+}
+
+@keyframes photo-confirm {
+  from { scale: 0.92; }
+  to { scale: 1; }
+}
+
 main.photo-active .photo-capture-panel {
   position: fixed;
   right: max(0.75rem, env(safe-area-inset-right));
@@ -472,5 +555,18 @@ code { display: block; overflow-x: auto; white-space: pre; color: #bae6fd; font-
     right: auto;
     left: max(0.45rem, env(safe-area-inset-left));
     width: min(26vw, 9rem);
+  }
+
+  .photo-capture-globe .capture-globe {
+    right: auto;
+    left: max(0.45rem, env(safe-area-inset-left));
+    width: min(24vw, 8.5rem);
+  }
+
+  .photo-winner-preview {
+    top: auto;
+    bottom: max(0.45rem, env(safe-area-inset-bottom));
+    left: max(0.45rem, env(safe-area-inset-left));
+    width: 3.8rem;
   }
 }

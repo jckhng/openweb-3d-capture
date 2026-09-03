@@ -16,7 +16,8 @@ The app is a capture and preflight tool. It does not reconstruct a Gaussian spla
 - Requires two viewpoints at least 6° apart for each completed checkpoint.
 - Runs local visual-connectivity checks and reports `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`.
 - Exports bounded photo packages for Spirula and LichtFeld, plus a full diagnostic archive.
-- Provides a separate close-focus mode that requests supported autofocus controls, checks preview stability, takes up to three full-resolution photographs, and retains only the sharpest acceptable image.
+- Provides a separate close-focus mode with the same 25-checkpoint globe, live move/hold/focus/burst/save feedback, optional automatic capture, a saved-image confirmation, and image-feature checks for overlap and viewpoint change.
+- Requests supported autofocus controls, checks preview stability, takes up to three full-resolution photographs, and retains only the sharpest acceptable image.
 
 The recorder evaluates at most four candidates per second. After movement, it requires a three-candidate stable window before accepting another reconstruction image. A complete required checkpoint set contains 50–100 selected images. Incomplete exports can contain a different number, and sparse captures fall back to all accepted images.
 
@@ -36,7 +37,7 @@ The static hosting provider still receives ordinary requests for application fil
 
 The 45 cm limit is provisional guidance, not a universal optical specification. ARCore currently defaults to fixed focus on supported cameras, while WebXR Raw Camera Access provides no autofocus, lens-selection, or manual-focus control. Automatic close-range rejection works only when the device supplies usable CPU depth. Without CPU depth, the app cannot measure closeness and places the initial subject estimate 1 m in front of the camera; globe guidance is consequently approximate.
 
-For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, measured coverage, or automatic viewpoint-diversity check.
+For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, or measured coverage. Its globe is a manual navigation sequence. Local feature matching rejects views that appear too similar or have too little overlap, but it does not recover a pose or prove geometric coverage.
 
 ## Capture workflow
 
@@ -56,9 +57,10 @@ Uncaptured cells are light blue, the active cell is blue, and completed cells ar
 ### Close-focus autofocus photos
 
 1. Select **Open close-focus photos**, center a textured part of the subject in the circular reticle, then select **Start photo scan**.
-2. Follow the level, raised, low, detail, and top-view prompts. They are count-based guidance, not measured pose coverage.
-3. At each overlapping viewpoint, stop and select **Capture this view**. The app waits for a stable preview, takes up to three full-resolution photographs, and saves only the sharpest acceptable result.
-4. Capture at least 50 accepted views, finish the set, then export to Spirula or LichtFeld and run SfM before training.
+2. Follow the blue active cell around the translucent globe. Each of its 25 checkpoints needs two accepted photographs. Globe rotation follows device orientation for presentation only; it does not measure the camera position.
+3. Move between viewpoints, keep the subject inside the reticle, and stop. Select **Arm this viewpoint**, or enable **Auto capture** after starting the scan. The app waits for sufficient detail, sharpness, and stability before taking a burst.
+4. The app retains the sharpest burst image, checks its visual overlap and displacement against accepted photographs, shows the saved winner, and asks for a wider or smaller step when the view is unsuitable.
+5. Capture at least 50 accepted views, finish the set, then export to Spirula or LichtFeld and run SfM before training.
 
 See [wider rollout testing](docs/wider-testing.md) for the detailed test protocol and failure recovery.
 

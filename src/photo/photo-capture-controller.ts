@@ -1,11 +1,18 @@
 import { exportDatasetZip, type ExportProfile } from "../dataset/zip";
 import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import { analyzeTargetImageQuality, type ImageQualityAnalysis } from "../quality/sharpness";
+import { extractBriefFeatures } from "../refinement/features";
 import { BUILD_TIMESTAMP } from "../shared/build";
 import type { CaptureMetadata, UnposedPhoto } from "../shared/types";
 import { makeCaptureId, type CapturePersistence } from "../storage/storage";
+import {
+  measurePhotoOverlap,
+  photoCapturePrompt,
+  PHOTO_TARGET,
+  type PhotoFeatureSignature,
+  type PhotoOverlapMetrics,
+} from "./photo-guidance";
 
-const PHOTO_TARGET = 50;
 const BURST_SIZE = 3;
 const PREVIEW_SAMPLE_COUNT = 7;
 const PREVIEW_SAMPLE_INTERVAL_MS = 120;
@@ -13,6 +20,18 @@ const MAXIMUM_PREVIEW_MOTION = 0.065;
 const MINIMUM_PHOTO_SHARPNESS = 0.32;
 
 type PhotoPhase = "closed" | "preview" | "capturing" | "complete";
+export type PhotoCaptureStage =
+  | "idle"
+  | "move"
+  | "ready"
+  | "focusing"
+  | "settling"
+  | "burst"
+  | "selecting"
+  | "overlap"
+  | "saving"
+  | "saved"
+  | "rejected";
 
 export interface PhotoCaptureSnapshot {
   phase: PhotoPhase;
@@ -26,6 +45,13 @@ export interface PhotoCaptureSnapshot {
   previewResolution?: { width: number; height: number };
   photoResolution?: { width: number; height: number };
   lastQuality?: ImageQualityAnalysis & { previewMotionScore: number };
+  liveQuality?: ImageQualityAnalysis & { previewMotionScore: number; ready: boolean };
+  lastOverlap?: PhotoOverlapMetrics;
+  stage: PhotoCaptureStage;
+  stageProgress: number;
+  burstFrame: number;
+  automaticCapture: boolean;
+  lastPhotoPreviewUrl?: string;
   instruction: string;
   lastError?: string;
 }
@@ -59,6 +85,7 @@ interface ScoredPhoto {
   width: number;
   height: number;
   quality: ImageQualityAnalysis;
+  gray: { width: number; height: number; data: Uint8Array };
 }
 
 type Listener = (snapshot: PhotoCaptureSnapshot) => void;
@@ -73,12 +100,22 @@ export class PhotoCaptureController {
   private video?: HTMLVideoElement;
   private activeMetadata?: CaptureMetadata;
   private recentSharpness: number[] = [];
+  private readonly signatures: Array<{ photoId: number; signature: PhotoFeatureSignature }> = [];
+  private previewTimer?: number;
+  private previousPreview?: PreviewSample;
+  private movementObserved = true;
+  private automaticCaptureEligibleAt = 0;
+  private lastPhotoPreviewUrl?: string;
   private readonly snapshot: PhotoCaptureSnapshot = {
     phase: "closed",
     photoCount: 0,
     target: PHOTO_TARGET,
     rejectedCount: 0,
     focusMode: "unavailable",
+    stage: "idle",
+    stageProgress: 0,
+    burstFrame: 0,
+    automaticCapture: false,
     instruction: "Open the autofocus camera for a close-focus photo scan.",
   };
 
@@ -132,6 +169,8 @@ export class PhotoCaptureController {
       };
       this.snapshot.focusMode = settings.focusMode ?? this.snapshot.focusMode;
       this.snapshot.focusDistance = settings.focusDistance;
+      this.snapshot.stage = "idle";
+      this.snapshot.stageProgress = 0;
       this.snapshot.instruction = "Center the close subject, then start the photo scan.";
       this.emit();
     } catch (error) {
@@ -168,13 +207,31 @@ export class PhotoCaptureController {
       },
     };
     await this.persistence.createCapture(metadata);
+    this.revokeLastPhotoPreview();
     this.activeMetadata = metadata;
     this.recentSharpness = [];
+    this.signatures.length = 0;
+    this.previousPreview = undefined;
+    this.movementObserved = true;
+    this.automaticCaptureEligibleAt = Date.now() + 600;
     this.snapshot.captureId = metadata.captureId;
     this.snapshot.photoCount = 0;
     this.snapshot.rejectedCount = 0;
     this.snapshot.lastQuality = undefined;
-    this.snapshot.instruction = photoPrompt(0);
+    this.snapshot.liveQuality = undefined;
+    this.snapshot.lastOverlap = undefined;
+    this.snapshot.stage = "move";
+    this.snapshot.stageProgress = 0;
+    this.snapshot.burstFrame = 0;
+    this.snapshot.instruction = photoCapturePrompt(0);
+    this.startPreviewMonitor();
+    this.emit();
+  }
+
+  setAutomaticCapture(enabled: boolean): void {
+    this.snapshot.automaticCapture = enabled;
+    this.automaticCaptureEligibleAt = Date.now() + 500;
+    if (enabled) this.movementObserved = true;
     this.emit();
   }
 
@@ -189,12 +246,19 @@ export class PhotoCaptureController {
     if (this.snapshot.phase === "capturing") return;
 
     this.snapshot.phase = "capturing";
-    this.snapshot.instruction = "Hold still — settling focus and capturing a sharp burst.";
+    this.snapshot.stage = "focusing";
+    this.snapshot.stageProgress = 0.08;
+    this.snapshot.burstFrame = 0;
+    this.snapshot.instruction = "FOCUSING — keep the object centered.";
     this.snapshot.lastError = undefined;
     this.emit();
 
     try {
       await this.requestCenterFocus(track);
+      this.snapshot.stage = "settling";
+      this.snapshot.stageProgress = 0.14;
+      this.snapshot.instruction = "HOLD STEADY — waiting for the image to settle.";
+      this.emit();
       const previewMotionScore = await this.waitForStablePreview(video);
       if (previewMotionScore > MAXIMUM_PREVIEW_MOTION) {
         this.reject(`Camera still moving (${Math.round(previewMotionScore * 100)}%). Hold still and try again.`);
@@ -203,6 +267,11 @@ export class PhotoCaptureController {
 
       const burst: ScoredPhoto[] = [];
       for (let index = 0; index < BURST_SIZE; index += 1) {
+        this.snapshot.stage = "burst";
+        this.snapshot.burstFrame = index + 1;
+        this.snapshot.stageProgress = 0.38 + index * 0.12;
+        this.snapshot.instruction = `CAPTURING BURST ${index + 1} / ${BURST_SIZE} — hold still.`;
+        this.emit();
         try {
           const source = await takeMaximumResolutionPhoto(imageCapture, this.preferredPhotoSettings);
           const jpeg = await normalizeJpeg(source);
@@ -213,6 +282,10 @@ export class PhotoCaptureController {
         }
         if (index + 1 < BURST_SIZE) await delay(100);
       }
+      this.snapshot.stage = "selecting";
+      this.snapshot.stageProgress = 0.72;
+      this.snapshot.instruction = "SELECTING — comparing sharpness across the burst.";
+      this.emit();
       const selectedIndex = bestPhotoIndex(burst);
       const selected = burst[selectedIndex];
       const threshold = this.sharpnessThreshold();
@@ -224,6 +297,30 @@ export class PhotoCaptureController {
       }
       if (selected.quality.sharpnessScore < threshold) {
         this.reject(`Best burst image was soft (${Math.round(selected.quality.sharpnessScore * 100)}%; need ${Math.round(threshold * 100)}%). Hold still or improve light.`);
+        return;
+      }
+
+      this.snapshot.stage = "overlap";
+      this.snapshot.stageProgress = 0.82;
+      this.snapshot.instruction = "CHECKING VIEW — measuring overlap and viewpoint change.";
+      this.emit();
+      const selectedSignature: PhotoFeatureSignature = {
+        width: selected.gray.width,
+        height: selected.gray.height,
+        features: extractBriefFeatures(selected.gray, {
+          maximumFeatures: 320,
+          fastThreshold: 18,
+          cellSize: 14,
+        }),
+      };
+      const overlap = measurePhotoOverlap(selectedSignature, this.signatures);
+      this.snapshot.lastOverlap = overlap;
+      if (overlap.verdict === "too-similar") {
+        this.reject("TOO SIMILAR — take a wider sideways step within this sector.", true);
+        return;
+      }
+      if (overlap.verdict === "low-overlap") {
+        this.reject("LOW OVERLAP — move closer to the previous viewpoint and keep the object centered.", true);
         return;
       }
 
@@ -258,18 +355,38 @@ export class PhotoCaptureController {
           selectedBurstIndex: selectedIndex,
           focusPoint: [0.5, 0.5],
         },
+        visualGuidance: {
+          verdict: overlap.verdict,
+          matches: overlap.matches,
+          matchRatio: overlap.matchRatio,
+          medianDisplacement: overlap.medianDisplacement,
+          referencePhotoId: overlap.referencePhotoId,
+        },
       };
+      this.snapshot.stage = "saving";
+      this.snapshot.stageProgress = 0.92;
+      this.snapshot.instruction = "SAVING LOCALLY — keep this screen open.";
+      this.emit();
       await this.persistence.appendUnposedPhoto(metadata.captureId, photo, selected.blob);
+      this.signatures.push({ photoId: id, signature: selectedSignature });
       this.recentSharpness.push(selected.quality.sharpnessScore);
       if (this.recentSharpness.length > 24) this.recentSharpness.shift();
       this.snapshot.photoCount += 1;
       this.snapshot.photoResolution = { width: selected.width, height: selected.height };
       this.snapshot.focusMode = settings.focusMode ?? this.snapshot.focusMode;
       this.snapshot.focusDistance = settings.focusDistance;
-      this.snapshot.instruction = `View saved. ${photoPrompt(this.snapshot.photoCount)}`;
+      this.setLastPhotoPreview(selected.blob);
+      this.snapshot.stage = "saved";
+      this.snapshot.stageProgress = 1;
+      this.snapshot.instruction = `VIEW SAVED — ${photoCapturePrompt(this.snapshot.photoCount)}`;
+      this.movementObserved = false;
+      this.previousPreview = undefined;
+      this.automaticCaptureEligibleAt = Date.now() + 900;
       if ("vibrate" in navigator) navigator.vibrate([35, 25, 55]);
     } catch (error) {
       this.snapshot.lastError = errorMessage(error);
+      this.snapshot.stage = "rejected";
+      this.snapshot.stageProgress = 0;
       this.snapshot.instruction = "Photo failed. Keep the subject centered and retry this view.";
     } finally {
       this.snapshot.phase = "preview";
@@ -286,10 +403,12 @@ export class PhotoCaptureController {
     metadata.updatedAt = new Date().toISOString();
     metadata.status = "complete";
     await this.persistence.finalizeCapture(metadata.captureId, metadata);
+    this.stopPreviewMonitor();
     this.activeMetadata = undefined;
     this.snapshot.captureId = undefined;
     this.snapshot.lastCaptureId = metadata.captureId;
     this.snapshot.phase = "complete";
+    this.snapshot.stage = "saved";
     this.snapshot.lastError = undefined;
     this.snapshot.instruction = this.snapshot.photoCount >= PHOTO_TARGET
       ? "Photo set saved. Run downstream SfM before training."
@@ -310,6 +429,7 @@ export class PhotoCaptureController {
   }
 
   async close(): Promise<void> {
+    this.stopPreviewMonitor();
     if (this.activeMetadata) {
       const metadata = this.activeMetadata;
       metadata.frameCount = this.snapshot.photoCount;
@@ -321,6 +441,8 @@ export class PhotoCaptureController {
     }
     this.stopCameraTracks();
     this.snapshot.phase = "closed";
+    this.snapshot.stage = "idle";
+    this.snapshot.stageProgress = 0;
     this.snapshot.captureId = undefined;
     this.snapshot.lastError = undefined;
     this.snapshot.instruction = "Open the autofocus camera for a close-focus photo scan.";
@@ -329,6 +451,7 @@ export class PhotoCaptureController {
 
   async dispose(): Promise<void> {
     await this.close();
+    this.revokeLastPhotoPreview();
     this.listeners.clear();
   }
 
@@ -383,6 +506,8 @@ export class PhotoCaptureController {
     let previous: PreviewSample | undefined;
     const recentMotion: number[] = [];
     for (let index = 0; index < PREVIEW_SAMPLE_COUNT; index += 1) {
+      this.snapshot.stageProgress = 0.14 + (index + 1) / PREVIEW_SAMPLE_COUNT * 0.2;
+      this.emit();
       const sample = samplePreview(video, this.qualityCanvas);
       if (previous) {
         recentMotion.push(luminanceDifference(previous.luminance, sample.luminance));
@@ -404,11 +529,15 @@ export class PhotoCaptureController {
     return Math.max(MINIMUM_PHOTO_SHARPNESS, Math.min(0.5, baseline * 0.65));
   }
 
-  private reject(message: string): void {
+  private reject(message: string, requireMovement = false): void {
     this.snapshot.rejectedCount += 1;
     this.snapshot.lastError = message;
     this.snapshot.instruction = message;
     this.snapshot.phase = "preview";
+    this.snapshot.stage = "rejected";
+    this.snapshot.stageProgress = 0;
+    this.automaticCaptureEligibleAt = Date.now() + 1200;
+    if (requireMovement) this.movementObserved = false;
     if ("vibrate" in navigator) navigator.vibrate([80, 40, 80]);
     this.emit();
   }
@@ -425,6 +554,88 @@ export class PhotoCaptureController {
     this.imageCapture = undefined;
     this.preferredPhotoSettings = undefined;
     this.video = undefined;
+  }
+
+  private startPreviewMonitor(): void {
+    this.stopPreviewMonitor();
+    this.previewTimer = window.setInterval(() => this.updateLivePreview(), 420);
+  }
+
+  private stopPreviewMonitor(): void {
+    if (this.previewTimer !== undefined) window.clearInterval(this.previewTimer);
+    this.previewTimer = undefined;
+    this.previousPreview = undefined;
+  }
+
+  private updateLivePreview(): void {
+    const video = this.video;
+    if (!video || !this.activeMetadata || this.snapshot.phase !== "preview") return;
+    try {
+      const sample = samplePreview(video, this.qualityCanvas);
+      const hadPrevious = Boolean(this.previousPreview);
+      const motion = this.previousPreview
+        ? luminanceDifference(this.previousPreview.luminance, sample.luminance)
+        : 0;
+      this.previousPreview = sample;
+      const sharpEnough = sample.quality.sharpnessScore >= this.sharpnessThreshold();
+      const detailedEnough = sample.quality.textureScore >= DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTexture;
+      const steady = motion <= MAXIMUM_PREVIEW_MOTION * 0.72;
+      const ready = steady && sharpEnough && detailedEnough;
+      this.snapshot.liveQuality = { ...sample.quality, previewMotionScore: motion, ready };
+      if (this.snapshot.stage === "saved" && Date.now() < this.automaticCaptureEligibleAt) {
+        this.emit();
+        return;
+      }
+      if (hadPrevious && !steady) {
+        this.movementObserved = true;
+        this.snapshot.lastError = undefined;
+        this.snapshot.stage = "move";
+        this.snapshot.stageProgress = 0;
+        this.snapshot.instruction = photoCapturePrompt(this.snapshot.photoCount);
+      } else if (!this.movementObserved) {
+        this.snapshot.stage = "move";
+        this.snapshot.stageProgress = 0;
+        this.snapshot.instruction = photoCapturePrompt(this.snapshot.photoCount);
+      } else if (!detailedEnough) {
+        this.snapshot.stage = "move";
+        this.snapshot.stageProgress = 0;
+        this.snapshot.instruction = "AIM AT MORE DETAIL — keep a textured part of the object in the reticle.";
+      } else if (!sharpEnough) {
+        this.snapshot.stage = "settling";
+        this.snapshot.stageProgress = 0.12;
+        this.snapshot.instruction = "HOLD STEADY — waiting for sharper focus.";
+      } else {
+        this.snapshot.stage = "ready";
+        this.snapshot.stageProgress = 0.18;
+        this.snapshot.instruction = this.snapshot.automaticCapture
+          ? "READY — automatic capture armed. Hold still."
+          : "READY — arm this viewpoint when the object is centered.";
+        if (
+          this.snapshot.automaticCapture &&
+          this.movementObserved &&
+          Date.now() >= this.automaticCaptureEligibleAt
+        ) {
+          this.movementObserved = false;
+          void this.capturePhoto();
+          return;
+        }
+      }
+      this.emit();
+    } catch {
+      // A transient video-frame read must not stop the preview or capture.
+    }
+  }
+
+  private setLastPhotoPreview(blob: Blob): void {
+    this.revokeLastPhotoPreview();
+    this.lastPhotoPreviewUrl = URL.createObjectURL(blob);
+    this.snapshot.lastPhotoPreviewUrl = this.lastPhotoPreviewUrl;
+  }
+
+  private revokeLastPhotoPreview(): void {
+    if (this.lastPhotoPreviewUrl) URL.revokeObjectURL(this.lastPhotoPreviewUrl);
+    this.lastPhotoPreviewUrl = undefined;
+    this.snapshot.lastPhotoPreviewUrl = undefined;
   }
 
   private emit(): void {
@@ -488,11 +699,18 @@ async function scorePhoto(blob: Blob, canvas: HTMLCanvasElement): Promise<Scored
       height,
     );
     const pixels = context.getImageData(0, 0, width, height).data;
+    const luminance = new Uint8Array(width * height);
+    for (let source = 0, target = 0; source < pixels.length; source += 4, target += 1) {
+      luminance[target] = Math.round(
+        0.2126 * pixels[source] + 0.7152 * pixels[source + 1] + 0.0722 * pixels[source + 2],
+      );
+    }
     return {
       blob,
       width: encodedDimensions?.width ?? bitmap.width,
       height: encodedDimensions?.height ?? bitmap.height,
       quality: analyzeTargetImageQuality(pixels, width, height),
+      gray: { width, height, data: luminance },
     };
   } finally {
     bitmap.close();
@@ -609,22 +827,6 @@ function waitForVideoDimensions(video: HTMLVideoElement): Promise<void> {
     video.addEventListener("loadedmetadata", loaded);
     video.addEventListener("resize", loaded);
   });
-}
-
-function photoPrompt(count: number): string {
-  const view = count % 12;
-  const ring = Math.floor(count / 12);
-  if (count >= PHOTO_TARGET) return "Minimum set reached. Add useful close details or finish.";
-  if (ring === 0) return `Level orbit: move ${clockDirection(view)}, stop, then capture.`;
-  if (ring === 1) return `Raised orbit: hold the phone higher and move ${clockDirection(view)}, then capture.`;
-  if (ring === 2) return `Low orbit: hold the phone lower and move ${clockDirection(view)}, then capture.`;
-  if (ring === 3) return `Close-detail orbit: move ${clockDirection(view)} and keep overlap, then capture.`;
-  return "Capture two top-down views with strong overlap, then finish.";
-}
-
-function clockDirection(view: number): string {
-  if (view === 0) return "to the starting view";
-  return `${view} / 12 around the subject`;
 }
 
 function delay(milliseconds: number): Promise<void> {

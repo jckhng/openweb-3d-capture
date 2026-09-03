@@ -30,11 +30,15 @@ export function CaptureGlobe({
   pose,
   captureMap,
   framingLost = false,
+  orientationOverride,
+  guidanceLabel,
 }: {
   report: CaptureReadinessReport;
   pose?: Matrix4;
   captureMap?: CaptureMapSnapshot;
   framingLost?: boolean;
+  orientationOverride?: GlobeOrientation;
+  guidanceLabel?: string;
 }) {
   const cells = report.metrics.coverageCells ?? [];
   const liveOrientation = coverageOrientation(pose, report.metrics.targetEstimate);
@@ -42,7 +46,7 @@ export function CaptureGlobe({
     ? coverageCell(liveOrientation)
     : report.metrics.currentCoverageCell;
   const fallbackLatitude = LATITUDES.find((band) => band.latitude === liveCell?.latitude)?.center ?? 5;
-  const orientation = liveOrientation ?? {
+  const orientation = orientationOverride ?? liveOrientation ?? {
     longitude: liveCell ? longitudeCenter(liveCell.azimuthBin) : 0,
     elevation: fallbackLatitude,
   };
@@ -54,7 +58,12 @@ export function CaptureGlobe({
     cells.filter((cell) => cell.required && cell.state === "captured").length;
   const required = report.metrics.coverageCheckpointsRequired ??
     cells.filter((cell) => cell.required).length;
-  const marker = project(orientation.longitude, orientation.elevation, orientation);
+  const markerLatitude = LATITUDES.find((band) => band.latitude === liveCell?.latitude)?.center ?? 5;
+  const marker = project(
+    liveCell?.latitude === "high" ? orientation.longitude : longitudeCenter(liveCell?.azimuthBin ?? 0),
+    markerLatitude,
+    orientation,
+  );
 
   return (
     <aside className={`capture-globe${framingLost ? " capture-globe-framing-lost" : ""}`} aria-label={`${completed} of ${required} capture checkpoints complete`}>
@@ -107,7 +116,7 @@ export function CaptureGlobe({
       </div>
       <div className="capture-globe-status">
         <strong>{completed}/{required}</strong>
-        <span>{target ? `next: ${latitudeLabel(target.latitude)} sector` : "checkpoint coverage complete"}</span>
+        <span>{guidanceLabel ?? (target ? `next: ${latitudeLabel(target.latitude)} sector` : "checkpoint coverage complete")}</span>
       </div>
     </aside>
   );
@@ -163,7 +172,7 @@ function CaptureConstellation({
   );
 }
 
-interface GlobeOrientation {
+export interface GlobeOrientation {
   longitude: number;
   elevation: number;
 }
