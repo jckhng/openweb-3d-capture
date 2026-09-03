@@ -72,15 +72,21 @@ export async function validateCaptureDataset(source: ValidationSource): Promise<
   const frames = await readJsonl(source, "telemetry/frames.jsonl", add);
   const imu = await readJsonl(source, "telemetry/imu.jsonl", add);
   const decisions = await readJsonl(source, "debug/session.jsonl", add);
+  const photos = paths.has("telemetry/photos.jsonl")
+    ? await readJsonl(source, "telemetry/photos.jsonl", add)
+    : [];
   summary.telemetryFrames = frames.length;
   summary.imuSamples = imu.length;
   summary.decisions = decisions.length;
 
-  if (capture) validateCapture(capture, frames, imu, add);
-  if (transforms) await validateTransforms(source, paths, transforms, frames, summary, add);
+  if (capture) validateCapture(capture, frames, photos, imu, add);
+  if (transforms) await validateTransforms(source, paths, transforms, frames, capture, summary, add);
   await validateTelemetry(source, paths, frames, decisions, capture, summary, add);
-  if (transforms) await validatePointCloud(source, paths, transforms, summary, add);
-  await validateTracking(source, paths, frames, summary, add);
+  await validateUnposedPhotos(source, paths, photos, capture, summary, add);
+  if (capture?.captureMode !== "photo-sfm") {
+    if (transforms) await validatePointCloud(source, paths, transforms, summary, add);
+    await validateTracking(source, paths, frames, summary, add);
+  }
 
   issues.sort((a, b) => severityOrder(a.severity) - severityOrder(b.severity) ||
     (a.path ?? "").localeCompare(b.path ?? "") || a.code.localeCompare(b.code));
@@ -94,6 +100,7 @@ export async function validateCaptureDataset(source: ValidationSource): Promise<
 function validateCapture(
   capture: JsonRecord,
   frames: JsonRecord[],
+  photos: JsonRecord[],
   imu: JsonRecord[],
   add: AddIssue,
 ): void {
@@ -103,8 +110,12 @@ function validateCapture(
   if (capture.status !== "complete") {
     add("warning", "capture-incomplete", "Capture status is not complete", "capture.json");
   }
-  if (!Number.isInteger(capture.frameCount) || capture.frameCount !== frames.length) {
-    add("error", "capture-frame-count", `capture.json frameCount ${String(capture.frameCount)} does not match ${frames.length} telemetry frames`, "capture.json");
+  const records = capture.captureMode === "photo-sfm" ? photos : frames;
+  if (capture.captureMode === "photo-sfm" && photos.length === 0) {
+    add("error", "photo-telemetry-empty", "Autofocus photo capture has no unposed photo telemetry", "telemetry/photos.jsonl");
+  }
+  if (!Number.isInteger(capture.frameCount) || capture.frameCount !== records.length) {
+    add("error", "capture-frame-count", `capture.json frameCount ${String(capture.frameCount)} does not match ${records.length} capture records`, "capture.json");
   }
   if (capture.hasImu === true && imu.length === 0) {
     add("warning", "imu-empty", "Capture declares IMU data but telemetry/imu.jsonl is empty", "telemetry/imu.jsonl");
@@ -123,21 +134,23 @@ async function validateTransforms(
   paths: Set<string>,
   transforms: JsonRecord,
   frames: JsonRecord[],
+  capture: JsonRecord | undefined,
   summary: ValidationSummary,
   add: AddIssue,
 ): Promise<void> {
+  const unposedPhotoMode = capture?.captureMode === "photo-sfm";
   if (transforms.camera_model !== "OPENCV") {
     add("error", "camera-model", "transforms.json camera_model must be OPENCV", "transforms.json");
   }
   for (const name of ["fl_x", "fl_y"] as const) {
-    if (!positiveFinite(transforms[name])) add("error", "camera-intrinsics", `${name} must be a positive finite number`, "transforms.json");
+    if (!unposedPhotoMode && !positiveFinite(transforms[name])) add("error", "camera-intrinsics", `${name} must be a positive finite number`, "transforms.json");
   }
   for (const name of ["cx", "cy"] as const) {
-    if (!finite(transforms[name])) add("error", "camera-intrinsics", `${name} must be finite`, "transforms.json");
+    if (!unposedPhotoMode && !finite(transforms[name])) add("error", "camera-intrinsics", `${name} must be finite`, "transforms.json");
   }
   const width = transforms.w;
   const height = transforms.h;
-  if (!positiveInteger(width) || !positiveInteger(height)) {
+  if (!unposedPhotoMode && (!positiveInteger(width) || !positiveInteger(height))) {
     add("error", "camera-resolution", "w and h must be positive integers", "transforms.json");
   }
   if (positiveInteger(width) && positiveInteger(height)) {
@@ -148,7 +161,7 @@ async function validateTransforms(
     ? transforms.frames.filter(isRecord)
     : [];
   summary.transformFrames = transformFrames.length;
-  if (!Array.isArray(transforms.frames) || transformFrames.length === 0) {
+  if (!Array.isArray(transforms.frames) || (!unposedPhotoMode && transformFrames.length === 0)) {
     add("error", "transforms-frames", "transforms.json must contain at least one frame", "transforms.json");
   }
   if (transformFrames.length !== frames.length) {
@@ -192,6 +205,49 @@ async function validateTransforms(
     } else if (telemetry.width !== dimensions.width || telemetry.height !== dimensions.height) {
       add("error", "telemetry-image-resolution", "Telemetry dimensions do not match JPEG dimensions", imagePath);
     }
+  }
+}
+
+async function validateUnposedPhotos(
+  source: ValidationSource,
+  paths: Set<string>,
+  photos: JsonRecord[],
+  capture: JsonRecord | undefined,
+  summary: ValidationSummary,
+  add: AddIssue,
+): Promise<void> {
+  if (capture?.captureMode !== "photo-sfm") return;
+  const ids = new Set<number>();
+  for (let index = 0; index < photos.length; index += 1) {
+    const photo = photos[index];
+    const context = `unposed photo ${index}`;
+    if (!Number.isInteger(photo.id) || ids.has(photo.id as number)) {
+      add("error", "photo-id", `${context} has a missing or duplicate integer id`, "telemetry/photos.jsonl");
+    } else {
+      ids.add(photo.id as number);
+    }
+    if (photo.poseStatus !== "unposed" || photo.imageSynchronized !== false) {
+      add("error", "photo-pose-status", `${context} must be explicitly unposed and unsynchronized`, "telemetry/photos.jsonl");
+    }
+    if ("cameraToWorld" in photo || "transform_matrix" in photo) {
+      add("error", "fabricated-photo-pose", `${context} must not contain a camera pose`, "telemetry/photos.jsonl");
+    }
+    const imagePath = photo.imagePath;
+    if (typeof imagePath !== "string" || !safeRelativePath(imagePath) || !paths.has(imagePath)) {
+      add("error", "missing-image", `${context} references a missing image`, typeof imagePath === "string" ? imagePath : undefined);
+      continue;
+    }
+    const bytes = await safeRead(source, imagePath, add);
+    if (!bytes) continue;
+    const dimensions = jpegDimensions(bytes);
+    if (!dimensions) {
+      add("error", "invalid-jpeg", "Image is not a readable JPEG", imagePath);
+      continue;
+    }
+    if (photo.width !== dimensions.width || photo.height !== dimensions.height) {
+      add("error", "photo-image-resolution", "Photo telemetry dimensions do not match JPEG dimensions", imagePath);
+    }
+    summary.images += 1;
   }
 }
 

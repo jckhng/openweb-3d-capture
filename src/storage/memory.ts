@@ -5,6 +5,7 @@ import type {
   CaptureMetadata,
   CaptureReadinessReport,
   IMUSample,
+  UnposedPhoto,
   VisualTrackingReport,
 } from "../shared/types";
 import type { CapturePersistence } from "./storage";
@@ -22,6 +23,7 @@ export class MemoryCaptureStore implements CapturePersistence {
       images: new Map(),
       depths: new Map(),
       candidatePreviews: new Map(),
+      unposedPhotos: [],
     });
   }
 
@@ -40,6 +42,14 @@ export class MemoryCaptureStore implements CapturePersistence {
     if (depth && frame.depthPath) dataset.depths.set(frame.depthPath, depth);
     dataset.capture.frameCount = dataset.frames.length;
     dataset.capture.hasDepth ||= Boolean(depth);
+  }
+
+  async appendUnposedPhoto(captureId: string, photo: UnposedPhoto, image: Blob): Promise<void> {
+    const dataset = this.require(captureId);
+    dataset.unposedPhotos ??= [];
+    dataset.unposedPhotos.push(structuredClone(photo));
+    dataset.images.set(photo.imagePath, image);
+    dataset.capture.frameCount = dataset.unposedPhotos.length;
   }
 
   async appendImu(captureId: string, samples: IMUSample[]): Promise<void> {
@@ -71,6 +81,7 @@ export class MemoryCaptureStore implements CapturePersistence {
       images: new Map(dataset.images),
       depths: new Map(dataset.depths),
       candidatePreviews: new Map(dataset.candidatePreviews),
+      unposedPhotos: structuredClone(dataset.unposedPhotos ?? []),
       visualTracking: dataset.visualTracking ? structuredClone(dataset.visualTracking) : undefined,
       readiness: dataset.readiness ? structuredClone(dataset.readiness) : undefined,
     };

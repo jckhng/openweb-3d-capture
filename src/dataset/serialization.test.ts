@@ -88,6 +88,72 @@ describe("Nerfstudio serialization", () => {
     });
   });
 
+  it("exports autofocus photographs as explicitly unposed SfM input", () => {
+    const image = new Blob(["jpg"], { type: "image/jpeg" });
+    const dataset: CaptureDataset = {
+      capture: {
+        format: "open3dcapture",
+        version: 1,
+        captureId: "capture-photo",
+        createdAt: "2026-09-03T00:00:00.000Z",
+        updatedAt: "2026-09-03T00:00:01.000Z",
+        captureMode: "photo-sfm",
+        source: "media-stream",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+        handoff: {
+          poseAuthority: "downstream-sfm",
+          imagesAreUnposed: true,
+          minimumRecommendedImages: 50,
+        },
+      },
+      frames: [],
+      decisions: [],
+      imu: [],
+      images: new Map([["images/000000.jpg", image]]),
+      depths: new Map(),
+      unposedPhotos: [{
+        id: 0,
+        timestamp: 1,
+        capturedAt: "2026-09-03T00:00:00.500Z",
+        imagePath: "images/000000.jpg",
+        width: 1920,
+        height: 1080,
+        poseStatus: "unposed",
+        imageSource: "image-capture",
+        imageSynchronized: false,
+        quality: {
+          blurScore: 0.1,
+          sharpnessScore: 0.9,
+          sharpFramesHybridScore: 100,
+          textureScore: 0.8,
+          previewMotionScore: 0.01,
+        },
+        camera: { focusMode: "continuous", burstSize: 3, selectedBurstIndex: 1 },
+      }],
+    };
+
+    const canonical = buildDatasetFiles(dataset);
+    const transforms = JSON.parse(canonical.find((file) => file.path === "transforms.json")!.data as string);
+    expect(transforms.frames).toEqual([]);
+    expect(canonical.map((file) => file.path)).toContain("telemetry/photos.jsonl");
+
+    const destination = buildExportFiles(dataset, "spirula");
+    const manifest = JSON.parse(destination.find((file) => file.path === "open3dcapture/export.json")!.data as string);
+    const instructions = destination.find((file) => file.path === "README-SPIRULA.txt")!.data as string;
+    expect(manifest).toMatchObject({
+      finalPoseAuthority: "downstream-sfm",
+      sourcePoseStatus: "unposed",
+      unposedPhotoMetadata: "open3dcapture/telemetry/photos.jsonl",
+    });
+    expect(manifest).not.toHaveProperty("webxrPoses");
+    expect(instructions).toContain("intentionally unposed");
+    expect(destination.map((file) => file.path)).toContain("images/000000.jpg");
+  });
+
   it("serializes quality decisions separately from accepted frames", () => {
     const decision = {
       candidateId: 4,

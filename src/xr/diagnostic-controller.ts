@@ -413,10 +413,12 @@ export class XRDiagnosticController {
     const captureId = this.lastCaptureId ?? this.activeCapture?.id;
     if (!captureId) throw new Error("No capture is available to export");
     const dataset = await this.persistence.loadCapture(captureId);
-    dataset.readiness ??= analyzeCaptureReadiness({
-      ...dataset,
-      targetEstimate: dataset.capture.target?.worldPoint,
-    });
+    if (dataset.capture.captureMode !== "photo-sfm") {
+      dataset.readiness ??= analyzeCaptureReadiness({
+        ...dataset,
+        targetEstimate: dataset.capture.target?.worldPoint,
+      });
+    }
     return {
       blob: await exportDatasetZip(dataset, profile),
       filename: exportFilename(captureId, profile),
@@ -428,10 +430,12 @@ export class XRDiagnosticController {
     profile: ExportProfile = "canonical",
   ): Promise<{ blob: Blob; filename: string }> {
     const dataset = await this.persistence.loadCapture(captureId);
-    dataset.readiness ??= analyzeCaptureReadiness({
-      ...dataset,
-      targetEstimate: dataset.capture.target?.worldPoint,
-    });
+    if (dataset.capture.captureMode !== "photo-sfm") {
+      dataset.readiness ??= analyzeCaptureReadiness({
+        ...dataset,
+        targetEstimate: dataset.capture.target?.worldPoint,
+      });
+    }
     return {
       blob: await exportDatasetZip(dataset, profile),
       filename: exportFilename(captureId, profile),

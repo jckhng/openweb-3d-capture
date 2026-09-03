@@ -103,6 +103,39 @@ export interface CaptureFrame {
   normDepthBufferFromNormView?: Matrix4;
 }
 
+/**
+ * A full-resolution browser-camera photograph that deliberately has no pose.
+ * It must be registered by downstream SfM before reconstruction or training.
+ */
+export interface UnposedPhoto {
+  id: number;
+  timestamp: number;
+  capturedAt: string;
+  imagePath: string;
+  width: number;
+  height: number;
+  poseStatus: "unposed";
+  imageSource: "image-capture";
+  imageSynchronized: false;
+  quality: Pick<FrameQuality, "blurScore" | "sharpFramesHybridScore"> & {
+    sharpnessScore: number;
+    textureScore: number;
+    previewMotionScore: number;
+  };
+  camera: {
+    focusMode?: string;
+    focusDistance?: number;
+    exposureMode?: string;
+    exposureTime?: number;
+    iso?: number;
+    whiteBalanceMode?: string;
+    zoom?: number;
+    burstSize: number;
+    selectedBurstIndex: number;
+    focusPoint?: [number, number];
+  };
+}
+
 export interface IMUSample {
   timestamp: number;
   gyro?: [number, number, number];
@@ -193,8 +226,8 @@ export interface CaptureMetadata {
   captureId: string;
   createdAt: string;
   updatedAt: string;
-  captureMode: "diagnostic" | "object" | "scene";
-  source: "webxr" | "replay";
+  captureMode: "diagnostic" | "object" | "scene" | "photo-sfm";
+  source: "webxr" | "replay" | "media-stream";
   units: "meters";
   frameCount: number;
   hasDepth: boolean;
@@ -211,6 +244,11 @@ export interface CaptureMetadata {
     lockedAt: string;
   };
   readiness?: CaptureReadinessSummary;
+  handoff?: {
+    poseAuthority: "downstream-sfm";
+    imagesAreUnposed: true;
+    minimumRecommendedImages: number;
+  };
 }
 
 export interface CaptureDataset {
@@ -221,6 +259,7 @@ export interface CaptureDataset {
   images: Map<string, Blob>;
   depths: Map<string, Blob>;
   candidatePreviews?: Map<string, Blob>;
+  unposedPhotos?: UnposedPhoto[];
   refinement?: DatasetRefinement;
   visualTracking?: VisualTrackingReport;
   readiness?: CaptureReadinessReport;

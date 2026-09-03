@@ -96,12 +96,19 @@ Implemented:
 * informational centered target-region feature and geometric-inlier telemetry
 * initial shadow-score replay on three retained phone captures: production-to-hybrid Spearman rank correlations of 0.41, 0.41, and 0.68; the metrics disagree enough to justify evaluation but not enough to replace the production gate without labeled blur and reconstruction evidence
 * distinct-viewpoint replay on `capture-1788423166798-qalrhh`: 123 accepted frames collapse to 24 object-relative representatives; previously bundled cells with less than 6° separation correctly remain sampled instead of appearing complete
+* experimental close-focus autofocus photo mode using the ordinary rear camera rather than the fixed-focus WebXR stream
+* capability-driven continuous/single-shot autofocus and center metering requests with browser-default fallback
+* preview-motion settling followed by an up-to-three-photo full-resolution burst; only the sharpest acceptable center-target image is retained
+* immediate OPFS persistence with focus, exposure, sharpness, texture, burst-selection, and explicit unposed metadata
+* separate `photo-sfm` capture schema and Spirula/LichtFeld exports that contain no fabricated or stale WebXR transforms
+* count-guided 50-view level/raised/low/detail/top workflow; its coverage is explicitly not pose-measured
+* landscape capture HUDs moved into a narrow right-side rail so WebXR and autofocus controls do not obscure the central subject
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (85 tests)
+npm test        PASS (87 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -202,7 +209,7 @@ Required before declaring M2 complete:
 Plan constraints clarified by implementation:
 
 * API-surface detection is not proof of a granted WebXR feature; the live session is authoritative.
-* `getUserMedia()` frames are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. They remain a diagnostic fallback and are marked as unsynchronized in telemetry.
+* `getUserMedia()` frames captured inside an XR session are not pose-synchronized and cannot satisfy Gate 0 or Gate 1. The separate autofocus photo mode intentionally treats them as unposed SfM input instead of mixing them with WebXR transforms.
 * M0 requests CPU depth only. GPU depth readback is deferred until a target device demonstrates it is needed.
 * M3 coverage guidance is now unblocked. Continue calibrating M2 quality thresholds, but do not make universal blur thresholds or phone pose refinement prerequisites for guidance work.
 * M5 seed generation was pulled forward for interoperability experiments. It does not replace downstream SfM or block M3.
@@ -738,7 +745,7 @@ Required behavior:
 * retain sharpness as the final authority when depth is missing or the object does not occupy the center
 * document the minimum practical object size at the calibrated distance
 
-If small-object detail remains inadequate at the focus floor, constrain web v1 to medium objects. Autofocus, macro-lens selection, and manual focus require a native Android capture path unless WebXR adds controls.
+If small-object detail remains inadequate at the WebXR focus floor, constrain WebXR mode to medium objects. Ordinary browser camera capture can supply autofocus photographs through the separate unposed SfM path. Deterministic macro-lens selection, manual focus, synchronized autofocus images and AR poses, and verified lens-state telemetry still require a native Android path unless the web platform adds those controls.
 
 ---
 
@@ -789,7 +796,7 @@ Properties:
 * fixed-focus optical floor on the current platform
 * downstream visual SfM required before training
 
-### Autofocus photo/SfM fallback — candidate web mode
+### Autofocus photo/SfM fallback — experimental implementation
 
 Use ordinary browser camera capture for sharper images, but do not claim that those images inherit synchronized WebXR poses.
 
@@ -799,8 +806,14 @@ Properties:
 * exports photos explicitly as unposed or approximately guided
 * routes to Spirula native SfM or LichtFeld COLMAP
 * exports unposed reconstruction images rather than pretending asynchronous photos inherit WebXR poses
+* requests supported continuous or single-shot autofocus and center metering
+* waits for a stable preview, captures up to three full-resolution photographs, and keeps the sharpest acceptable result
+* records available focus/exposure settings and rejects motion, low-detail, and soft results
+* uses count-based orbit prompts because no pose is available to measure coverage or viewpoint diversity
 
 This is preferable to attaching stale or guessed WebXR transforms to autofocus images.
+
+Status: implemented in the web application and covered by archive/export validation tests. Target-phone autofocus behavior, threshold calibration, memory pressure, true still resolution, minimum usable distance, 50-view capture ergonomics, and downstream Spirula/LichtFeld reconstruction remain unvalidated.
 
 ### WebXR plus browser autofocus hybrid — experimental only
 

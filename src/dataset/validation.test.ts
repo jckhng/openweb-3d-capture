@@ -52,6 +52,53 @@ describe("capture dataset validation", () => {
       "unsynchronized-frame",
     ]));
   });
+
+  it("accepts an explicitly unposed autofocus photo archive", async () => {
+    const photo = {
+      id: 0,
+      timestamp: 1,
+      capturedAt: "2026-09-03T00:00:00.000Z",
+      imagePath: "images/000000.jpg",
+      width: 3,
+      height: 2,
+      poseStatus: "unposed",
+      imageSource: "image-capture",
+      imageSynchronized: false,
+      quality: {
+        blurScore: 0.1,
+        sharpnessScore: 0.9,
+        textureScore: 0.8,
+        previewMotionScore: 0.01,
+      },
+      camera: { focusMode: "continuous", burstSize: 3, selectedBurstIndex: 1 },
+    };
+    const files = new Map([
+      ["transforms.json", json({ camera_model: "OPENCV", frames: [] })],
+      ["capture.json", json({
+        format: "open3dcapture",
+        version: 1,
+        captureId: "photo-test",
+        captureMode: "photo-sfm",
+        source: "media-stream",
+        units: "meters",
+        frameCount: 1,
+        hasDepth: false,
+        hasImu: false,
+        status: "complete",
+      })],
+      ["telemetry/frames.jsonl", encoder.encode("")],
+      ["telemetry/photos.jsonl", jsonl(photo)],
+      ["telemetry/imu.jsonl", encoder.encode("")],
+      ["debug/session.jsonl", encoder.encode("")],
+      ["images/000000.jpg", jpeg(3, 2)],
+    ]);
+
+    const report = await validateCaptureDataset(memorySource(files));
+    expect(report.valid).toBe(true);
+    expect(report.summary).toMatchObject({ transformFrames: 0, telemetryFrames: 0, images: 1 });
+    expect(report.issues.map((issue) => issue.code)).not.toContain("transforms-frames");
+    expect(report.issues.map((issue) => issue.code)).not.toContain("camera-intrinsics");
+  });
 });
 
 function validFiles(): Map<string, Uint8Array> {

@@ -17,6 +17,10 @@ import type { CaptureReadinessReport } from "../shared/types";
 import type { ExportProfile } from "../dataset/zip";
 import { CaptureGlobe } from "./CaptureGlobe";
 import { useScreenWakeLock } from "./use-screen-wake-lock";
+import {
+  PhotoCaptureController,
+  type PhotoCaptureSnapshot,
+} from "../photo/photo-capture-controller";
 
 const MINIMUM_TARGET_DISTANCE_CM = Math.round(
   DEFAULT_QUALITY_SELECTOR_CONFIG.minimumTargetDistance * 100,
@@ -30,7 +34,9 @@ function createStore() {
 export function App() {
   const store = useMemo(createStore, []);
   const controller = useMemo(() => new XRDiagnosticController(store), [store]);
+  const photoController = useMemo(() => new PhotoCaptureController(store), [store]);
   const [snapshot, setSnapshot] = useState<DiagnosticSnapshot>(() => controller.getSnapshot());
+  const [photoSnapshot, setPhotoSnapshot] = useState<PhotoCaptureSnapshot>(() => photoController.getSnapshot());
   const [captures, setCaptures] = useState<CaptureMetadata[]>([]);
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
@@ -39,7 +45,13 @@ export function App() {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const previousCheckpointCount = useRef(0);
   const previousOffTarget = useRef(false);
-  const wakeLockState = useScreenWakeLock(snapshot.running || Boolean(snapshot.captureFinalization));
+  const photoVideo = useRef<HTMLVideoElement>(null);
+  const photoActive = photoSnapshot.phase === "preview" || photoSnapshot.phase === "capturing";
+  const photoCaptureSupported = typeof window !== "undefined" &&
+    "ImageCapture" in window && Boolean(navigator.mediaDevices?.getUserMedia);
+  const wakeLockState = useScreenWakeLock(
+    snapshot.running || photoActive || Boolean(snapshot.captureFinalization),
+  );
 
   const refreshCaptures = async () => {
     const [nextCaptures, nextStorage] = await Promise.all([
@@ -51,6 +63,7 @@ export function App() {
   };
 
   useEffect(() => controller.subscribe(setSnapshot), [controller]);
+  useEffect(() => photoController.subscribe(setPhotoSnapshot), [photoController]);
 
   useEffect(() => {
     void run("capability probe", async () => {
@@ -60,10 +73,11 @@ export function App() {
     });
     return () => {
       void controller.dispose();
+      void photoController.dispose();
     };
     // Controller and store are stable for this component lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller]);
+  }, [controller, photoController]);
 
   useEffect(() => {
     if (snapshot.lastCaptureId) void refreshCaptures().catch(showError);
@@ -72,8 +86,17 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.classList.toggle("xr-active-root", snapshot.running);
-    return () => document.documentElement.classList.remove("xr-active-root");
-  }, [snapshot.running]);
+    document.documentElement.classList.toggle("photo-active-root", photoActive);
+    return () => {
+      document.documentElement.classList.remove("xr-active-root");
+      document.documentElement.classList.remove("photo-active-root");
+    };
+  }, [snapshot.running, photoActive]);
+
+  useEffect(() => {
+    if (photoSnapshot.phase === "complete") void refreshCaptures().catch(showError);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoSnapshot.phase]);
 
   useEffect(() => {
     if (!snapshot.captureId) {
@@ -137,6 +160,16 @@ export function App() {
   }
 
   async function startCapture() {
+    await ensureCaptureStorage();
+    await controller.startBasicCapture();
+  }
+
+  async function startPhotoCapture() {
+    await ensureCaptureStorage();
+    await photoController.startCapture();
+  }
+
+  async function ensureCaptureStorage() {
     if (store.kind !== "opfs") {
       throw new Error("Persistent browser storage is required for object capture on this device");
     }
@@ -148,7 +181,11 @@ export function App() {
     ) {
       throw new Error(`At least ${formatBytes(MINIMUM_FREE_STORAGE_BYTES)} of free browser storage is required`);
     }
-    await controller.startBasicCapture();
+  }
+
+  async function openPhotoCamera() {
+    if (!photoVideo.current) throw new Error("Camera preview is unavailable");
+    await photoController.open(photoVideo.current);
   }
 
   async function deleteCapture(capture: CaptureMetadata) {
@@ -166,7 +203,7 @@ export function App() {
   }
 
   return (
-    <main className={snapshot.running ? "xr-active" : undefined}>
+    <main className={snapshot.running ? "xr-active" : photoActive ? "photo-active" : undefined}>
       <header>
         <p className="eyebrow">Capture preflight</p>
         <h1>Open Web 3D Capture</h1>
@@ -176,24 +213,26 @@ export function App() {
         <p className="lede">Open the camera, center the object, then start capture when you are ready.</p>
       </header>
 
-      {error || snapshot.lastError ? (
-        <div className="error" role="alert">{error ?? snapshot.lastError}</div>
+      {error || (photoActive ? photoSnapshot.lastError : snapshot.lastError ?? photoSnapshot.lastError) ? (
+        <div className="error" role="alert">
+          {error ?? (photoActive ? photoSnapshot.lastError : snapshot.lastError ?? photoSnapshot.lastError)}
+        </div>
       ) : null}
       {notice ? <div className="notice" role="status">{notice}</div> : null}
 
-      {!snapshot.running ? (
+      {!snapshot.running && !photoActive ? (
         <section className="onboarding" aria-labelledby="before-capture-title">
           <div className="section-heading">
             <h2 id="before-capture-title">Before capturing</h2>
-            <strong className={snapshot.capabilities?.immersiveAR.available ? "available" : "unavailable"}>
-              {snapshot.capabilities?.immersiveAR.available ? "Android WebXR ready" : "Android WebXR required"}
+            <strong className={store.kind === "opfs" ? "available" : "unavailable"}>
+              {store.kind === "opfs" ? "Local capture ready" : "Persistent storage required"}
             </strong>
           </div>
           <ol className="capture-steps">
-            <li>Use Android Chrome on an ARCore-capable phone.</li>
-            <li>Choose a static, medium-sized object in bright, even light. Stay at least {MINIMUM_TARGET_DISTANCE_CM} cm away.</li>
-            <li>Open the camera, center the object, then explicitly start capture.</li>
-            <li>Move to the highlighted cell, stop, and wait for the orange confirmation before moving again.</li>
+            <li>Choose WebXR for guided medium-object capture or Autofocus photos for small, close subjects.</li>
+            <li>Use bright, even light and keep the object static.</li>
+            <li>Open the selected camera, center the object, then explicitly start capture.</li>
+            <li>Move between overlapping viewpoints and stop while each image is acquired.</li>
           </ol>
           <p className="privacy-note">
             <strong>Local browser only — no capture uploads.</strong>{" "}
@@ -209,10 +248,22 @@ export function App() {
                 : storageStatus.persisted ? "persistent" : "best effort"}
             />
             <Metric label="screen wake lock" value={wakeLockState} />
+            <Metric label="autofocus photos" value={photoCaptureSupported ? "available" : "unavailable"} />
           </dl>
           {storageWarning(store.kind, storageStatus)}
         </section>
       ) : null}
+
+      <video
+        ref={photoVideo}
+        className="photo-preview"
+        autoPlay
+        muted
+        playsInline
+        aria-label="Autofocus camera preview"
+      />
+
+      {photoActive ? <div className="photo-reticle" aria-hidden="true" /> : null}
 
       {snapshot.running ? (
         <div className={`reticle ${snapshot.targetFraming && !snapshot.targetFraming.centered ? "quality-off-target" : qualityClass(snapshot.captureQuality.lastDecision)}`} aria-hidden="true" />
@@ -233,6 +284,23 @@ export function App() {
         />
       ) : null}
 
+      {photoActive ? (
+        <PhotoCapturePanel
+          snapshot={photoSnapshot}
+          busy={busy}
+          storageAvailable={store.kind === "opfs"}
+          onStart={() => void run("starting autofocus photo scan", startPhotoCapture)}
+          onCapture={() => void run("capturing sharp photo burst", () => photoController.capturePhoto())}
+          onFinish={() => void run("saving autofocus photo scan", async () => {
+            await photoController.finishCapture();
+            await refreshCaptures();
+          })}
+          onClose={() => void run("closing autofocus camera", async () => {
+            await photoController.close();
+            await refreshCaptures();
+          })}
+        />
+      ) : (
       <section className="capture-panel" aria-label="Capture controls">
         <p className="local-data-status">LOCAL DEVICE ONLY · NO CAPTURE UPLOADS</p>
         <p className="build-id">
@@ -240,8 +308,8 @@ export function App() {
         </p>
         <div className="capture-status">
           <div>
-            <span>{snapshot.captureId ? "views" : "scan"}</span>
-            <strong>{snapshot.captureId ? snapshot.captureProgress.current : "ready"}</strong>
+            <span>{snapshot.captureId ? "views" : "capture"}</span>
+            <strong>{snapshot.captureId ? snapshot.captureProgress.current : "choose mode"}</strong>
           </div>
           <div>
             <span>{snapshot.captureId ? "orbit" : "minimum distance"}</span>
@@ -265,13 +333,21 @@ export function App() {
         </p>
         <div className="actions">
           {!snapshot.running ? (
-            <button
-              className="primary"
-              disabled={Boolean(busy) || snapshot.capabilities?.immersiveAR.available !== true}
-              onClick={() => void run("opening XR camera", () => controller.start())}
-            >
-              Open camera
-            </button>
+            <>
+              <button
+                className="primary"
+                disabled={Boolean(busy) || snapshot.capabilities?.immersiveAR.available !== true}
+                onClick={() => void run("opening XR camera", () => controller.start())}
+              >
+                Open guided WebXR
+              </button>
+              <button
+                disabled={Boolean(busy) || store.kind !== "opfs" || !photoCaptureSupported}
+                onClick={() => void run("opening autofocus camera", openPhotoCamera)}
+              >
+                Open close-focus photos
+              </button>
+            </>
           ) : null}
           {snapshot.running && !snapshot.captureId ? (
             <button
@@ -314,6 +390,23 @@ export function App() {
               </button>
             </>
           ) : null}
+          {!snapshot.running && photoSnapshot.lastCaptureId ? (
+            <>
+              <button
+                className="primary"
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting autofocus photos for Spirula", () => downloadCapture("spirula", photoSnapshot.lastCaptureId))}
+              >
+                Autofocus set to Spirula
+              </button>
+              <button
+                disabled={Boolean(busy)}
+                onClick={() => void run("exporting autofocus photos for LichtFeld", () => downloadCapture("lichtfeld", photoSnapshot.lastCaptureId))}
+              >
+                Autofocus set to LichtFeld
+              </button>
+            </>
+          ) : null}
           {snapshot.running ? (
             <button
               disabled={Boolean(busy)}
@@ -341,6 +434,7 @@ export function App() {
           </div>
         </details> : null}
       </section>
+      )}
 
       {busy ? (
         <p className="busy" aria-live="polite">
@@ -350,7 +444,7 @@ export function App() {
         </p>
       ) : null}
 
-      {!snapshot.captureId && snapshot.lastReadiness ? (
+      {!photoActive && !snapshot.captureId && snapshot.lastReadiness ? (
         <ReadinessPanel report={snapshot.lastReadiness} />
       ) : null}
 
@@ -529,10 +623,15 @@ export function App() {
                   <span>
                     {capture.frameCount} frames · {capture.captureMode} · {capture.status} · {capture.createdAt}
                     {capture.applicationBuild ? ` · build ${formatBuildTimestamp(capture.applicationBuild.builtAt)}` : " · legacy build"}
-                    {capture.readiness ? ` · ${readinessLabel(capture.readiness.status)}` : " · preflight unavailable"}
+                    {capture.captureMode === "photo-sfm"
+                      ? " · unposed · downstream SfM required"
+                      : capture.readiness ? ` · ${readinessLabel(capture.readiness.status)}` : " · preflight unavailable"}
                   </span>
                   {capture.status === "incomplete" ? (
-                    <small>Interrupted capture. Export the partial data or delete it; resuming is unsafe after WebXR creates a new coordinate frame.</small>
+                    <small>
+                      Interrupted capture. Export the partial data or delete it.
+                      {capture.source === "webxr" ? " Resuming is unsafe after WebXR creates a new coordinate frame." : " Autofocus photos already saved remain usable for SfM."}
+                    </small>
                   ) : null}
                 </div>
                 <div className="capture-export-actions">
@@ -589,6 +688,69 @@ export function App() {
         </nav>
       </footer>
     </main>
+  );
+}
+
+function PhotoCapturePanel({
+  snapshot,
+  busy,
+  storageAvailable,
+  onStart,
+  onCapture,
+  onFinish,
+  onClose,
+}: {
+  snapshot: PhotoCaptureSnapshot;
+  busy?: string;
+  storageAvailable: boolean;
+  onStart: () => void;
+  onCapture: () => void;
+  onFinish: () => void;
+  onClose: () => void;
+}) {
+  const capturing = snapshot.phase === "capturing";
+  return (
+    <section className="capture-panel photo-capture-panel" aria-label="Autofocus photo controls">
+      <p className="local-data-status">LOCAL DEVICE ONLY · UNPOSED PHOTOS · DOWNSTREAM SFM REQUIRED</p>
+      <p className="build-id">
+        Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
+      </p>
+      <div className="capture-status">
+        <div><span>saved views</span><strong>{snapshot.photoCount}/{snapshot.target}</strong></div>
+        <div><span>focus</span><strong>{snapshot.focusMode}</strong></div>
+        <div>
+          <span>sharpness</span>
+          <strong>{snapshot.lastQuality ? formatPercent(snapshot.lastQuality.sharpnessScore) : "—"}</strong>
+        </div>
+      </div>
+      <p className={`capture-instruction ${snapshot.lastError ? "quality-warning" : ""}`}>
+        {snapshot.instruction}
+      </p>
+      {!snapshot.captureId ? (
+        <p className="photo-mode-note">
+          Up to three full-resolution photos are taken per stop; only the sharpest is retained. Coverage prompts are count-based because this mode intentionally records no camera pose.
+        </p>
+      ) : null}
+      <div className="actions">
+        {!snapshot.captureId ? (
+          <button className="primary" disabled={Boolean(busy) || !storageAvailable} onClick={onStart}>
+            Start photo scan
+          </button>
+        ) : (
+          <>
+            <button className="primary photo-shutter" disabled={Boolean(busy) || capturing} onClick={onCapture}>
+              {capturing ? "Capturing…" : "Capture this view"}
+            </button>
+            <button disabled={Boolean(busy) || capturing} onClick={onFinish}>
+              Finish photo set
+            </button>
+          </>
+        )}
+        <button disabled={Boolean(busy) || capturing} onClick={onClose}>
+          {snapshot.captureId ? "Save partial and close" : "Close camera"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -774,7 +936,7 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
   if (!snapshot.running) {
     return snapshot.lastReadiness
       ? `${readinessLabel(snapshot.lastReadiness.status)} — ${snapshot.lastReadiness.primaryAction}`
-      : "Center a well-lit object, stand at least 45 cm away, and start the guided scan.";
+      : "Choose guided WebXR for medium objects or autofocus photos for close subjects.";
   }
   if (!snapshot.captureId) {
     if (snapshot.lastReadiness) {

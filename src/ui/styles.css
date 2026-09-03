@@ -9,6 +9,10 @@
 :root.xr-active-root body,
 :root.xr-active-root #root { background: transparent; }
 
+:root.photo-active-root,
+:root.photo-active-root body,
+:root.photo-active-root #root { background: #000; }
+
 * { box-sizing: border-box; }
 
 body { margin: 0; min-width: 320px; min-height: 100vh; }
@@ -72,6 +76,9 @@ details { margin-top: 1rem; border-top: 1px solid #334155; padding-top: 0.8rem; 
 summary { color: #94a3b8; cursor: pointer; }
 .diagnostic-actions { margin-top: 0.8rem; }
 .reticle { display: none; }
+.photo-preview { display: none; }
+.photo-reticle { display: none; }
+.photo-mode-note { color: #cbd5e1; font-size: 0.76rem; line-height: 1.4; }
 
 .capture-globe {
   width: min(18rem, 80vw);
@@ -122,6 +129,94 @@ main.xr-active {
   overflow: hidden;
   background: transparent;
   pointer-events: none;
+}
+
+main.photo-active {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+main.photo-active header,
+main.photo-active .debug-section,
+main.photo-active .readiness-panel,
+main.photo-active .onboarding,
+main.photo-active .tester-panel,
+main.photo-active .app-footer,
+main.photo-active > .notice { display: none; }
+
+main.photo-active .photo-preview {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+main.photo-active .photo-reticle {
+  position: fixed;
+  top: 45%;
+  left: 50%;
+  z-index: 2;
+  display: block;
+  width: min(62vw, 20rem);
+  aspect-ratio: 1;
+  border: 2px solid rgb(125 211 252 / 78%);
+  border-radius: 50%;
+  translate: -50% -50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 50%), inset 0 0 2rem rgb(14 165 233 / 8%);
+  pointer-events: none;
+}
+
+main.photo-active .photo-reticle::before,
+main.photo-active .photo-reticle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: "";
+  background: rgb(224 242 254 / 82%);
+  translate: -50% -50%;
+}
+
+main.photo-active .photo-reticle::before { width: 1.2rem; height: 1px; }
+main.photo-active .photo-reticle::after { width: 1px; height: 1.2rem; }
+
+main.photo-active .photo-capture-panel {
+  position: fixed;
+  right: max(0.75rem, env(safe-area-inset-right));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 3;
+  margin: 0 auto;
+  width: min(42rem, calc(100% - 1.5rem));
+  padding: 0.75rem;
+  border-color: rgb(125 211 252 / 50%);
+  background: rgb(2 6 23 / 78%);
+  backdrop-filter: blur(8px);
+}
+
+main.photo-active .capture-status { grid-template-columns: repeat(3, 1fr); }
+main.photo-active .capture-status > div { padding: 0.45rem 0.6rem; background: rgb(2 6 23 / 60%); }
+main.photo-active .capture-status strong { overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
+main.photo-active .capture-instruction { min-height: 0; margin: 0.55rem 0; font-size: 0.85rem; }
+main.photo-active .photo-mode-note { margin: 0 0 0.55rem; }
+main.photo-active .actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); }
+main.photo-active .actions button { min-height: 3rem; }
+main.photo-active .photo-shutter { min-height: 3.5rem; }
+main.photo-active .error,
+main.photo-active .busy {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  right: 0.75rem;
+  left: 0.75rem;
+  z-index: 4;
 }
 
 main.xr-active header,
@@ -289,4 +384,93 @@ code { display: block; overflow-x: auto; white-space: pre; color: #bae6fd; font-
   main.xr-active .capture-status span { font-size: 0.55rem; }
   main.xr-active .actions button { flex: initial; }
   .capture-list li { align-items: stretch; flex-direction: column; }
+}
+
+@media (orientation: landscape) and (max-height: 600px) {
+  main.photo-active .photo-capture-panel,
+  main.xr-active .capture-panel {
+    top: max(0.45rem, env(safe-area-inset-top));
+    right: max(0.45rem, env(safe-area-inset-right));
+    bottom: max(0.45rem, env(safe-area-inset-bottom));
+    left: auto;
+    width: min(18rem, 34vw);
+    max-height: none;
+    margin: 0;
+    overflow-y: auto;
+    padding: 0.55rem;
+  }
+
+  main.photo-active .photo-reticle {
+    top: 50%;
+    width: min(36vw, 14rem);
+  }
+
+  main.photo-active .capture-status,
+  main.xr-active .capture-status {
+    gap: 0.3rem;
+  }
+
+  main.photo-active .capture-status > div,
+  main.xr-active .capture-status > div {
+    min-width: 0;
+    padding: 0.35rem;
+  }
+
+  main.photo-active .capture-status span,
+  main.xr-active .capture-status span {
+    overflow: hidden;
+    font-size: 0.48rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  main.photo-active .capture-status strong,
+  main.xr-active .capture-status strong {
+    font-size: 0.8rem;
+  }
+
+  main.photo-active .local-data-status,
+  main.xr-active .local-data-status {
+    font-size: 0.48rem;
+    line-height: 1.25;
+  }
+
+  main.photo-active .build-id,
+  main.xr-active .build-id {
+    margin-bottom: 0.3rem;
+    font-size: 0.5rem;
+  }
+
+  main.photo-active .capture-instruction,
+  main.xr-active .capture-instruction {
+    margin: 0.4rem 0;
+    font-size: 0.72rem;
+    line-height: 1.3;
+  }
+
+  main.photo-active .photo-mode-note {
+    margin-bottom: 0.4rem;
+    font-size: 0.62rem;
+    line-height: 1.25;
+  }
+
+  main.photo-active .actions,
+  main.xr-active .actions {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  main.photo-active .actions button,
+  main.photo-active .photo-shutter,
+  main.xr-active .actions button {
+    min-height: 2.25rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  main.xr-active .capture-globe {
+    right: auto;
+    left: max(0.45rem, env(safe-area-inset-left));
+    width: min(26vw, 9rem);
+  }
 }

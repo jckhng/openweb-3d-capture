@@ -5,6 +5,7 @@ import type {
   CaptureMetadata,
   CaptureReadinessReport,
   IMUSample,
+  UnposedPhoto,
   VisualTrackingReport,
 } from "../shared/types";
 import type { CapturePersistence } from "./storage";
@@ -19,6 +20,7 @@ export class OPFSCaptureStore implements CapturePersistence {
   async createCapture(metadata: CaptureMetadata): Promise<void> {
     const directory = await this.captureDirectory(metadata.captureId, true);
     await directory.getDirectoryHandle("frames", { create: true });
+    await directory.getDirectoryHandle("photos", { create: true });
     await directory.getDirectoryHandle("images", { create: true });
     await directory.getDirectoryHandle("depth", { create: true });
     await directory.getDirectoryHandle("telemetry", { create: true });
@@ -58,6 +60,20 @@ export class OPFSCaptureStore implements CapturePersistence {
     metadata.frameCount = Math.max(metadata.frameCount, frame.id + 1);
     metadata.hasDepth ||= Boolean(depth);
     metadata.updatedAt = new Date().toISOString();
+    await writeJson(directory, "capture.json", metadata);
+  }
+
+  async appendUnposedPhoto(captureId: string, photo: UnposedPhoto, image: Blob): Promise<void> {
+    const directory = await this.captureDirectory(captureId);
+    const photos = await directory.getDirectoryHandle("photos", { create: true });
+    const images = await directory.getDirectoryHandle("images");
+    await writeFile(images, basename(photo.imagePath), image);
+    await writeJson(photos, `${pad(photo.id)}.json`, photo);
+
+    const metadata = await readJson<CaptureMetadata>(directory, "capture.json");
+    metadata.frameCount = Math.max(metadata.frameCount, photo.id + 1);
+    metadata.updatedAt = new Date().toISOString();
+    metadata.cameraResolution ??= { width: photo.width, height: photo.height };
     await writeJson(directory, "capture.json", metadata);
   }
 
@@ -118,6 +134,24 @@ export class OPFSCaptureStore implements CapturePersistence {
       }
     }
 
+    const unposedPhotos: UnposedPhoto[] = [];
+    try {
+      const photosDirectory = await directory.getDirectoryHandle("photos");
+      const photoNames: string[] = [];
+      for await (const [name, handle] of entriesOf(photosDirectory)) {
+        if (handle.kind === "file" && name.endsWith(".json")) photoNames.push(name);
+      }
+      photoNames.sort();
+      for (const name of photoNames) {
+        const photo = await readJson<UnposedPhoto>(photosDirectory, name);
+        unposedPhotos.push(photo);
+        const image = await readFileIfPresent(directory, "images", basename(photo.imagePath));
+        if (image) images.set(photo.imagePath, image);
+      }
+    } catch {
+      // WebXR-only captures have no unposed photo records.
+    }
+
     const decisions: CaptureDecision[] = [];
     const candidatePreviews = new Map<string, Blob>();
     try {
@@ -164,7 +198,7 @@ export class OPFSCaptureStore implements CapturePersistence {
     } catch {
       // Captures created before capture preflight have no readiness report.
     }
-    return { capture, frames, decisions, imu, images, depths, candidatePreviews, visualTracking, readiness };
+    return { capture, frames, decisions, imu, images, depths, candidatePreviews, unposedPhotos, visualTracking, readiness };
   }
 
   async listCaptures(): Promise<CaptureMetadata[]> {

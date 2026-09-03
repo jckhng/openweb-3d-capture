@@ -8,6 +8,7 @@ import type {
   CaptureMetadata,
   CaptureReadinessStatus,
   IMUSample,
+  UnposedPhoto,
 } from "../shared/types";
 
 export interface NerfstudioFrame {
@@ -129,6 +130,10 @@ export function serializeDecisionsJsonl(decisions: CaptureDecision[]): string {
   return decisions.map((decision) => JSON.stringify(decision)).join("\n") + (decisions.length ? "\n" : "");
 }
 
+export function serializeUnposedPhotosJsonl(photos: UnposedPhoto[]): string {
+  return photos.map((photo) => JSON.stringify(photo)).join("\n") + (photos.length ? "\n" : "");
+}
+
 export function serializeCaptureMetadata(metadata: CaptureMetadata): string {
   return JSON.stringify(metadata, null, 2) + "\n";
 }
@@ -168,6 +173,13 @@ export function buildDatasetFiles(dataset: CaptureDataset, pointCloud?: PointClo
       data: serializeDecisionsJsonl(dataset.decisions),
     },
   ];
+
+  if (dataset.unposedPhotos?.length) {
+    files.push({
+      path: "telemetry/photos.jsonl",
+      data: serializeUnposedPhotosJsonl(dataset.unposedPhotos),
+    });
+  }
 
   if (dataset.visualTracking) {
     files.push({
@@ -222,7 +234,7 @@ export function buildExportFiles(
   const files: DatasetFile[] = [
     {
       path: `README-${profile.toUpperCase()}.txt`,
-      data: destinationInstructions(profile, imageSelection, dataset.readiness?.status),
+      data: destinationInstructions(profile, imageSelection, dataset.capture, dataset.readiness?.status),
     },
     {
       path: "open3dcapture/export.json",
@@ -234,7 +246,13 @@ export function buildExportFiles(
         sourceCaptureId: dataset.capture.captureId,
         imageDirectory: "images",
         finalPoseAuthority: "downstream-sfm",
-        webxrPoses: "open3dcapture/telemetry/frames.jsonl",
+        sourcePoseStatus: dataset.capture.captureMode === "photo-sfm" ? "unposed" : "webxr-prior",
+        webxrPoses: dataset.capture.captureMode === "photo-sfm"
+          ? undefined
+          : "open3dcapture/telemetry/frames.jsonl",
+        unposedPhotoMetadata: dataset.unposedPhotos?.length
+          ? "open3dcapture/telemetry/photos.jsonl"
+          : undefined,
         readiness: dataset.readiness ? "open3dcapture/preflight/readiness.json" : undefined,
         imageSelection,
       }, null, 2) + "\n",
@@ -248,6 +266,13 @@ export function buildExportFiles(
       data: serializeFramesJsonl(dataset.frames),
     },
   ];
+
+  if (dataset.unposedPhotos?.length) {
+    files.push({
+      path: "open3dcapture/telemetry/photos.jsonl",
+      data: serializeUnposedPhotosJsonl(dataset.unposedPhotos),
+    });
+  }
 
   if (dataset.readiness) {
     files.push({
@@ -276,6 +301,16 @@ export function buildExportFiles(
 }
 
 export function selectDestinationImages(dataset: CaptureDataset): DestinationImageSelection {
+  if (dataset.capture.captureMode === "photo-sfm") {
+    const photos = dataset.unposedPhotos ?? [];
+    return {
+      mode: "all-images-fallback",
+      sourceImageCount: dataset.images.size,
+      selectedImageCount: photos.length,
+      selectedFrameIds: photos.map((photo) => photo.id),
+      reason: "Autofocus photo mode exports every accepted full-resolution image for downstream SfM registration.",
+    };
+  }
   const cells = dataset.readiness?.metrics.coverageCells ?? [];
   const availableFrameIds = new Set(
     dataset.frames
@@ -369,10 +404,14 @@ function coveredAzimuthBins(
 function destinationInstructions(
   profile: Exclude<ExportProfile, "canonical">,
   imageSelection: DestinationImageSelection,
+  capture: CaptureMetadata,
   readinessStatus?: CaptureReadinessStatus,
 ): string {
+  const photoMode = capture.captureMode === "photo-sfm";
   const selectionNote = imageSelection.mode === "all-images-fallback"
-    ? `The sector sample was too sparse to filter safely, so the images directory contains all ${imageSelection.sourceImageCount} source images.`
+    ? photoMode
+      ? `The images directory contains all ${imageSelection.selectedImageCount} accepted autofocus photographs.`
+      : `The sector sample was too sparse to filter safely, so the images directory contains all ${imageSelection.sourceImageCount} source images.`
     : `The images directory contains ${imageSelection.selectedImageCount} sharp stationary sector frames selected from ${imageSelection.sourceImageCount} source images.`;
   const readinessWarning = readinessStatus && readinessStatus !== "ready"
     ? `WARNING: capture preflight status is ${readinessStatus.toUpperCase()}. Review open3dcapture/preflight/readiness.json before reconstruction.`
@@ -389,7 +428,9 @@ function destinationInstructions(
       "4. Run Spirula's native SfM (or its COLMAP workflow) before training.",
       "",
       "This package intentionally has no root transforms.json, sparse/, or colmap/ marker.",
-      "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
+      photoMode
+        ? "These autofocus photographs are intentionally unposed. Spirula SfM must register them before training."
+        : "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
       selectionNote,
       "",
     ].filter((line): line is string => line !== undefined).join("\n");
@@ -406,7 +447,9 @@ function destinationInstructions(
     "5. Run sparse reconstruction, inspect its quality metrics, then import/train.",
     "",
     "This package intentionally contains no fabricated COLMAP model.",
-    "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
+    photoMode
+      ? "These autofocus photographs are intentionally unposed. COLMAP must register them before training."
+      : "WebXR poses are navigation priors stored under open3dcapture/telemetry; they are not final training poses.",
     selectionNote,
     "",
   ].filter((line): line is string => line !== undefined).join("\n");

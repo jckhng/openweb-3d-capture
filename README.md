@@ -1,11 +1,11 @@
 # Open Web 3D Capture
 
-Open Web 3D Capture is an experimental, local-first Android WebXR capture app for Gaussian splatting and photogrammetry. It turns object capture into a guided stop-and-shoot orbit, keeps the subject centered, selects sharp and spatially distinct images, and packages them for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
+Open Web 3D Capture is an experimental, local-first Android capture app for Gaussian splatting and photogrammetry. It provides a pose-guided WebXR mode for medium objects and an autofocus photo mode for small, close subjects, then packages the images for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
 
-The app is a capture and preflight tool. It does not reconstruct a Gaussian splat or produce final training poses on the phone. WebXR poses drive guidance and remain available as provenance; downstream structure from motion (SfM) remains the final pose authority.
+The app is a capture and preflight tool. It does not reconstruct a Gaussian splat or produce final training poses on the phone. WebXR poses drive guidance in WebXR mode and remain available as provenance. Autofocus-mode photos are explicitly unposed. Downstream structure from motion (SfM) remains the final pose authority in both modes.
 
 > [!IMPORTANT]
-> The current capture path requires Android Chrome on an ARCore-capable phone, an immersive AR session, Origin Private File System storage, and granted WebXR Raw Camera Access. WebXR feature detection does not guarantee that a session will expose synchronized camera images. The live capability and capture status in the app are authoritative.
+> Both modes require persistent Origin Private File System storage. Guided WebXR additionally requires Android Chrome on an ARCore-capable phone and granted WebXR Raw Camera Access. Close-focus mode requires browser `ImageCapture` support and exports unposed photographs that must pass through SfM. The autofocus mode is implemented but still requires target-phone and reconstruction validation.
 
 ## What it does
 
@@ -16,6 +16,7 @@ The app is a capture and preflight tool. It does not reconstruct a Gaussian spla
 - Requires two viewpoints at least 6° apart for each completed checkpoint.
 - Runs local visual-connectivity checks and reports `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`.
 - Exports bounded photo packages for Spirula and LichtFeld, plus a full diagnostic archive.
+- Provides a separate close-focus mode that requests supported autofocus controls, checks preview stability, takes up to three full-resolution photographs, and retains only the sharpest acceptable image.
 
 The recorder evaluates at most four candidates per second. After movement, it requires a three-candidate stable window before accepting another reconstruction image. A complete required checkpoint set contains 50–100 selected images. Incomplete exports can contain a different number, and sparse captures fall back to all accepted images.
 
@@ -27,21 +28,23 @@ The static hosting provider still receives ordinary requests for application fil
 
 ## Supported capture conditions
 
-- Static, textured, medium-sized subject.
+- Static, textured subject.
 - Bright, even illumination.
 - Enough safe space to move around the subject.
 - At least 250 MB of available browser storage.
-- Approximately 45 cm or more between the phone and subject.
+- Approximately 45 cm or more in WebXR mode; close-focus distance depends on the selected phone camera.
 
 The 45 cm limit is provisional guidance, not a universal optical specification. ARCore currently defaults to fixed focus on supported cameras, while WebXR Raw Camera Access provides no autofocus, lens-selection, or manual-focus control. Automatic close-range rejection works only when the device supplies usable CPU depth. Without CPU depth, the app cannot measure closeness and places the initial subject estimate 1 m in front of the camera; globe guidance is consequently approximate.
 
-Small close-range subjects remain outside the calibrated web capture path.
+For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, measured coverage, or automatic viewpoint-diversity check.
 
 ## Capture workflow
 
+### Guided WebXR
+
 1. Open the deployed HTTPS application in Android Chrome. Avoid embedded social-app browsers.
 2. Confirm that immersive AR, OPFS local storage, and the XR camera image are available.
-3. Select **Open camera**, center the subject, and remain at least 45 cm away. If target distance is displayed, verify that it is plausible.
+3. Select **Open guided WebXR**, center the subject, and remain at least 45 cm away. If target distance is displayed, verify that it is plausible.
 4. Select **Start capture**. Opening the camera does not begin recording.
 5. Move to the highlighted globe cell, stop, and hold through the settling prompt.
 6. After **VIEWPOINT 1 / 2**, take a sideways step within the same cell, stop, and wait for **SECTOR CAPTURED**.
@@ -49,6 +52,13 @@ Small close-range subjects remain outside the calibrated web capture path.
 8. Select **Finish scan**, review the preflight result, and choose an export.
 
 Uncaptured cells are light blue, the active cell is blue, and completed cells are orange. The required checkpoints are six low, twelve standard handheld, six raised, and one top checkpoint. On devices with CPU depth, a display-only constellation shows newly observed surface points in blue and multi-view support in orange.
+
+### Close-focus autofocus photos
+
+1. Select **Open close-focus photos**, center a textured part of the subject in the circular reticle, then select **Start photo scan**.
+2. Follow the level, raised, low, detail, and top-view prompts. They are count-based guidance, not measured pose coverage.
+3. At each overlapping viewpoint, stop and select **Capture this view**. The app waits for a stable preview, takes up to three full-resolution photographs, and saves only the sharpest acceptable result.
+4. Capture at least 50 accepted views, finish the set, then export to Spirula or LichtFeld and run SfM before training.
 
 See [wider rollout testing](docs/wider-testing.md) for the detailed test protocol and failure recovery.
 
@@ -58,9 +68,9 @@ See [wider rollout testing](docs/wider-testing.md) for the detailed test protoco
 | --- | --- | --- |
 | **Spirula ZIP** | Selected reconstruction images, preflight report, WebXR provenance, and handoff instructions. It deliberately omits root pose and reconstruction markers. | Extract the ZIP, create a dataset from the image directory, run Spirula's built-in SfM, inspect registration, then train. |
 | **LichtFeld ZIP** | Selected reconstruction images, preflight report, WebXR provenance, and handoff instructions. It contains no fabricated COLMAP model. | Extract the ZIP and run the [`community:colmap`](https://lichtfeld.io/plugins/) reconstruction plugin, which currently requires LichtFeld 0.5.0 or newer. Inspect the sparse reconstruction before training. |
-| **Archive ZIP** | Complete accepted images, raw WebXR transforms, depth, IMU, decisions, rejected-frame samples, visual tracking, and preflight data. When synchronized CPU depth is available, it also includes `pointcloud.ply` referenced by `transforms.json`. | Engineering analysis, validation, desktop refinement, and recovery. |
+| **Archive ZIP** | Complete accepted images and mode-specific telemetry. WebXR archives include raw transforms, depth, IMU, decisions, visual tracking, and preflight data. Autofocus archives include explicit unposed-photo and camera-control metadata. | Engineering analysis, validation, desktop refinement, and recovery. |
 
-Spirula and LichtFeld destination ZIPs store WebXR telemetry under `open3dcapture/` but do not present those poses as reconstruction output. Each populated globe cell contributes at most four representatives with motion score at most 0.4, ranked using the attributed hybrid sharpness score. Sparse captures fall back to all accepted images rather than applying an unsafe filter. Exporting below the preflight threshold produces an interactive warning and a warning inside the package.
+Spirula and LichtFeld destination ZIPs store WebXR telemetry under `open3dcapture/` when it exists but do not present those poses as reconstruction output. Autofocus exports contain no fabricated pose. Each populated WebXR globe cell contributes at most four representatives with motion score at most 0.4, ranked using the attributed hybrid sharpness score. Sparse WebXR captures fall back to all accepted images rather than applying an unsafe filter. Exporting below the WebXR preflight threshold produces an interactive warning and a warning inside the package.
 
 The Archive seed point cloud provides metric depth initialization and has been imported successfully by Spirula, but raw WebXR poses have not produced reconstruction quality comparable to desktop SfM. The LichtFeld photo-to-COLMAP handoff remains subject to wider multi-device rollout testing.
 
@@ -95,7 +105,8 @@ Implementation status, validation evidence, rejected experiments, and future wor
 ## Current limitations
 
 - WebXR Raw Camera Access is an experimental optional API. A non-null `view.camera` during the live XR session is the decisive signal.
-- The `getUserMedia()` diagnostic fallback is not pose-synchronized and cannot satisfy reconstruction readiness.
+- Autofocus `getUserMedia()`/`ImageCapture` photographs are not pose-synchronized; their orbit prompts are not measured and their exports require downstream SfM.
+- Browser camera capability reporting and autofocus behavior vary by device. The close-focus burst and thresholds require target-phone calibration.
 - Only CPU-accessible WebXR depth is recorded. GPU-only depth does not produce depth files, the constellation, distance enforcement, or a seed point cloud.
 - Fixed-focus WebXR can irreversibly blur small or close subjects.
 - Phone-side visual tracking checks overlap and connectivity but does not refine production poses.
