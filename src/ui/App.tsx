@@ -96,11 +96,6 @@ export function App() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
-  async function startGuidedCapture() {
-    await controller.start();
-    await controller.startBasicCapture();
-  }
-
   return (
     <main className={snapshot.running ? "xr-active" : undefined}>
       <header>
@@ -109,7 +104,7 @@ export function App() {
         <p className="header-build-id">
           Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
         </p>
-        <p className="lede">Follow the live angle guide, close the orbit, then export reconstruction-ready photos.</p>
+        <p className="lede">Open the camera, center the object, then start capture when you are ready.</p>
       </header>
 
       {error || snapshot.lastError ? (
@@ -158,9 +153,9 @@ export function App() {
             <button
               className="primary"
               disabled={Boolean(busy)}
-              onClick={() => void run("starting guided scan", startGuidedCapture)}
+              onClick={() => void run("opening XR camera", () => controller.start())}
             >
-              Start guided scan
+              Open camera
             </button>
           ) : null}
           {snapshot.running && !snapshot.captureId ? (
@@ -169,7 +164,7 @@ export function App() {
               disabled={Boolean(busy)}
               onClick={() => void run("starting object capture", () => controller.startBasicCapture())}
             >
-              Scan another object
+              {snapshot.lastCaptureId ? "Start another capture" : "Start capture"}
             </button>
           ) : null}
           {snapshot.captureId ? (
@@ -235,7 +230,7 @@ export function App() {
       {busy ? (
         <p className="busy" aria-live="polite">
           {busy === "saving capture"
-            ? `${busy} — ${formatVisualProcessing(snapshot.visualTracking)}`
+            ? finalizationMessage(snapshot)
             : busy}
         </p>
       ) : null}
@@ -539,6 +534,19 @@ function formatVisualProcessing(report: DiagnosticSnapshot["visualTracking"]) {
   return maximum === undefined ? "deferred" : `deferred repair ${attempts} / ${maximum}`;
 }
 
+function finalizationMessage(snapshot: DiagnosticSnapshot): string {
+  if (snapshot.captureFinalization === "saving") {
+    return "Saving capture locally — keep this screen open.";
+  }
+  if (snapshot.captureFinalization === "refining") {
+    return `Capture saved locally — finishing analysis. Leaving now preserves the photos but may skip final checks. ${formatVisualProcessing(snapshot.visualTracking)}`;
+  }
+  if (snapshot.captureFinalization === "saved") {
+    return "Capture saved locally.";
+  }
+  return "Finishing capture.";
+}
+
 function qualityClass(reason: DiagnosticSnapshot["captureQuality"]["lastDecision"]) {
   if (reason === "accepted" || reason === "checkpoint-burst") return "quality-good";
   if (reason === "waiting") return "";
@@ -577,6 +585,8 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
       return currentCheckpointCaptured(snapshot.captureReadiness)
         ? "SECTOR CAPTURED — move to the highlighted unlit sector."
         : "HOLD STEADY — waiting for a sharp checkpoint burst.";
+    case "sector-full":
+      return "SECTOR FULL — ten sharp images retained; move to the highlighted sector.";
     case "tracking":
       return "TRACKING LOST — aim at a detailed, well-lit area.";
     case "image-unavailable":

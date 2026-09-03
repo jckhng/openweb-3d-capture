@@ -32,6 +32,7 @@ export interface FrameQuality {
 export type CaptureDecisionReason =
   | "accepted"
   | "checkpoint-burst"
+  | "sector-full"
   | "tracking"
   | "image-unavailable"
   | "unsynchronized-image"

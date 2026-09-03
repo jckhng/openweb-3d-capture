@@ -21,6 +21,7 @@ const MINIMUM_FRAMES_FOR_VISUAL_CHECK = 12;
 const MAXIMUM_LOOP_ROTATION_RADIANS = 25 * Math.PI / 180;
 const MAXIMUM_CHECKPOINT_MOTION_SCORE = 0.55;
 const CHECKPOINT_BURST_SAMPLES = 2;
+export const MAXIMUM_SELECTED_FRAMES_PER_CELL = 10;
 
 const COVERAGE_LATITUDE_BANDS: ReadonlyArray<{
   latitude: CaptureCoverageLatitude;
@@ -28,10 +29,10 @@ const COVERAGE_LATITUDE_BANDS: ReadonlyArray<{
   maximumDegrees: number;
   requiredStride: number;
 }> = [
-  { latitude: "low", minimumDegrees: -35, maximumDegrees: -5, requiredStride: 2 },
-  { latitude: "level", minimumDegrees: -5, maximumDegrees: 10, requiredStride: 1 },
-  { latitude: "raised", minimumDegrees: 10, maximumDegrees: 25, requiredStride: 2 },
-  { latitude: "high", minimumDegrees: 25, maximumDegrees: 50, requiredStride: 3 },
+  { latitude: "low", minimumDegrees: -30, maximumDegrees: -5, requiredStride: 2 },
+  { latitude: "level", minimumDegrees: -5, maximumDegrees: 15, requiredStride: 1 },
+  { latitude: "raised", minimumDegrees: 15, maximumDegrees: 45, requiredStride: 2 },
+  { latitude: "high", minimumDegrees: 45, maximumDegrees: 90, requiredStride: 12 },
 ];
 
 type ElevationBand = "low" | "level" | "high";
@@ -328,15 +329,10 @@ function analyzeCoverage(
   const stableCandidates = new Map<string, CaptureFrame[]>();
   let currentCell: { azimuthBin: number; latitude: CaptureCoverageLatitude } | undefined;
   for (const frame of frames) {
-    const position = translationOf(frame.cameraToWorld);
-    const delta = subtract(position, target);
-    const horizontal = Math.hypot(delta[0], delta[2]);
-    if (horizontal < 0.05) continue;
-    const azimuth = Math.atan2(delta[0], delta[2]);
-    const normalized = (azimuth + Math.PI) / (2 * Math.PI);
-    const azimuthBin = Math.min(AZIMUTH_BIN_COUNT - 1, Math.floor(normalized * AZIMUTH_BIN_COUNT));
+    const coverageCell = locateCoverageCell(frame.cameraToWorld, target);
+    if (!coverageCell) continue;
+    const { azimuthBin, elevation, latitude } = coverageCell;
     bins.add(azimuthBin);
-    const elevation = Math.atan2(delta[1], horizontal) * 180 / Math.PI;
     elevations.push(elevation);
     bands.add(
       elevation < -ELEVATION_BAND_ANGLE_DEGREES
@@ -345,7 +341,6 @@ function analyzeCoverage(
           ? "high"
           : "level",
     );
-    const latitude = coverageLatitude(elevation);
     currentCell = { azimuthBin, latitude };
     const cell = cells.find(
       (candidate) => candidate.azimuthBin === azimuthBin && candidate.latitude === latitude,
@@ -366,7 +361,7 @@ function analyzeCoverage(
     cell.selectedFrameIds = [...(stableCandidates.get(`${cell.latitude}:${cell.azimuthBin}`) ?? [])]
       .sort((left, right) => frameSharpness(right) - frameSharpness(left))
       .filter((frame) => frameSharpness(frame) >= MINIMUM_SHARPNESS)
-      .slice(0, CHECKPOINT_BURST_SAMPLES)
+      .slice(0, MAXIMUM_SELECTED_FRAMES_PER_CELL)
       .map((frame) => frame.id);
     cell.state = cell.selectedFrameIds.length >= CHECKPOINT_BURST_SAMPLES
       ? "captured"
@@ -388,9 +383,27 @@ function analyzeCoverage(
   };
 }
 
+export function locateCoverageCell(
+  cameraToWorld: Matrix4,
+  target: [number, number, number],
+): { azimuthBin: number; latitude: CaptureCoverageLatitude; elevation: number } | undefined {
+  const position = translationOf(cameraToWorld);
+  const delta = subtract(position, target);
+  const horizontal = Math.hypot(delta[0], delta[2]);
+  if (horizontal < 0.05) return undefined;
+  const azimuth = Math.atan2(delta[0], delta[2]);
+  const normalized = (azimuth + Math.PI) / (2 * Math.PI);
+  const elevation = Math.atan2(delta[1], horizontal) * 180 / Math.PI;
+  const latitude = coverageLatitude(elevation);
+  const azimuthBin = latitude === "high"
+    ? 0
+    : Math.min(AZIMUTH_BIN_COUNT - 1, Math.floor(normalized * AZIMUTH_BIN_COUNT));
+  return { azimuthBin, latitude, elevation };
+}
+
 function createCoverageCells(): CaptureCoverageCell[] {
   return COVERAGE_LATITUDE_BANDS.flatMap((band) => (
-    Array.from({ length: AZIMUTH_BIN_COUNT }, (_, azimuthBin): CaptureCoverageCell => ({
+    Array.from({ length: band.latitude === "high" ? 1 : AZIMUTH_BIN_COUNT }, (_, azimuthBin): CaptureCoverageCell => ({
       azimuthBin,
       latitude: band.latitude,
       required: azimuthBin % band.requiredStride === 0,

@@ -9,6 +9,7 @@ const LONGITUDE_SECTORS = 12;
 const CENTER_X = 100;
 const CENTER_Y = 86;
 const RADIUS = 76;
+const DISPLAY_ELEVATION = 28;
 
 const LATITUDES: ReadonlyArray<{
   latitude: CaptureCoverageLatitude;
@@ -16,10 +17,10 @@ const LATITUDES: ReadonlyArray<{
   maximum: number;
   center: number;
 }> = [
-  { latitude: "high", minimum: 25, maximum: 50, center: 37.5 },
-  { latitude: "raised", minimum: 10, maximum: 25, center: 17.5 },
-  { latitude: "level", minimum: -5, maximum: 10, center: 2.5 },
-  { latitude: "low", minimum: -35, maximum: -5, center: -20 },
+  { latitude: "high", minimum: 45, maximum: 90, center: 67.5 },
+  { latitude: "raised", minimum: 15, maximum: 45, center: 30 },
+  { latitude: "level", minimum: -5, maximum: 15, center: 5 },
+  { latitude: "low", minimum: -30, maximum: -5, center: -17.5 },
 ];
 
 export function CaptureGlobe({
@@ -30,21 +31,24 @@ export function CaptureGlobe({
   pose?: Matrix4;
 }) {
   const cells = report.metrics.coverageCells ?? [];
-  const liveCell = liveCoverageCell(pose, report.metrics.targetEstimate) ??
-    report.metrics.currentCoverageCell;
-  const centerLongitude = liveCell
-    ? longitudeCenter(liveCell.azimuthBin)
-    : 0;
+  const liveOrientation = coverageOrientation(pose, report.metrics.targetEstimate);
+  const liveCell = liveOrientation
+    ? coverageCell(liveOrientation)
+    : report.metrics.currentCoverageCell;
+  const fallbackLatitude = LATITUDES.find((band) => band.latitude === liveCell?.latitude)?.center ?? 5;
+  const orientation = liveOrientation ?? {
+    longitude: liveCell ? longitudeCenter(liveCell.azimuthBin) : 0,
+    elevation: fallbackLatitude,
+  };
   const target = nextTargetCell(cells, liveCell);
-  const polygons = cells.map((cell) => projectCell(cell, centerLongitude)).sort(
+  const polygons = cells.map((cell) => projectCell(cell, orientation)).sort(
     (a, b) => a.depth - b.depth,
   );
   const completed = report.metrics.coverageCheckpointsCompleted ??
     cells.filter((cell) => cell.required && cell.state === "captured").length;
   const required = report.metrics.coverageCheckpointsRequired ??
     cells.filter((cell) => cell.required).length;
-  const currentLatitude = LATITUDES.find((band) => band.latitude === liveCell?.latitude)?.center ?? 2.5;
-  const marker = project(centerLongitude, currentLatitude, centerLongitude);
+  const marker = project(orientation.longitude, orientation.elevation, orientation);
 
   return (
     <aside className="capture-globe" aria-label={`${completed} of ${required} capture checkpoints complete`}>
@@ -75,12 +79,14 @@ export function CaptureGlobe({
             ].filter(Boolean).join(" ")}
           />
         ))}
-        {[-35, -5, 10, 25, 50].map((latitude) => {
-          const y = project(0, latitude, 0).y;
-          const radius = Math.cos(latitude * Math.PI / 180) * RADIUS;
-          return <ellipse key={latitude} cx={CENTER_X} cy={y} rx={radius} ry={Math.max(2, radius * 0.12)} className="globe-grid" />;
-        })}
-        <ellipse cx={CENTER_X} cy={CENTER_Y} rx={RADIUS} ry={RADIUS} className="globe-outline" />
+        {[-30, -5, 15, 45, 90].map((latitude) => (
+          <polyline
+            key={latitude}
+            points={latitudeLine(latitude, orientation)}
+            className="globe-grid"
+          />
+        ))}
+        <circle cx={CENTER_X} cy={CENTER_Y} r={RADIUS} className="globe-outline" />
         {liveCell ? (
           <g className="globe-you" transform={`translate(${marker.x} ${marker.y})`} filter="url(#globe-glow)">
             <circle r="5" />
@@ -96,17 +102,33 @@ export function CaptureGlobe({
   );
 }
 
-function projectCell(cell: CaptureCoverageCell, centerLongitude: number) {
+interface GlobeOrientation {
+  longitude: number;
+  elevation: number;
+}
+
+function projectCell(cell: CaptureCoverageCell, orientation: GlobeOrientation) {
   const latitude = LATITUDES.find((band) => band.latitude === cell.latitude) ?? LATITUDES[2];
+  if (cell.latitude === "high") {
+    const perimeter = Array.from({ length: 73 }, (_, index) => (
+      project(-180 + index * 5, latitude.minimum, orientation)
+    ));
+    const center = project(orientation.longitude, 90, orientation);
+    return {
+      cell,
+      depth: center.depth,
+      points: perimeter.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" "),
+    };
+  }
   const minimumLongitude = -180 + cell.azimuthBin * 360 / LONGITUDE_SECTORS;
   const maximumLongitude = minimumLongitude + 360 / LONGITUDE_SECTORS;
   const corners = [
-    project(minimumLongitude, latitude.minimum, centerLongitude),
-    project(maximumLongitude, latitude.minimum, centerLongitude),
-    project(maximumLongitude, latitude.maximum, centerLongitude),
-    project(minimumLongitude, latitude.maximum, centerLongitude),
+    project(minimumLongitude, latitude.minimum, orientation),
+    project(maximumLongitude, latitude.minimum, orientation),
+    project(maximumLongitude, latitude.maximum, orientation),
+    project(minimumLongitude, latitude.maximum, orientation),
   ];
-  const center = project(longitudeCenter(cell.azimuthBin), latitude.center, centerLongitude);
+  const center = project(longitudeCenter(cell.azimuthBin), latitude.center, orientation);
   return {
     cell,
     depth: center.depth,
@@ -114,29 +136,51 @@ function projectCell(cell: CaptureCoverageCell, centerLongitude: number) {
   };
 }
 
-function project(longitude: number, latitude: number, centerLongitude: number) {
-  const lon = normalizeDegrees(longitude - centerLongitude) * Math.PI / 180;
+function project(longitude: number, latitude: number, orientation: GlobeOrientation) {
+  const lon = normalizeDegrees(longitude - orientation.longitude) * Math.PI / 180;
   const lat = latitude * Math.PI / 180;
+  const pitch = (orientation.elevation - DISPLAY_ELEVATION) * Math.PI / 180;
+  const sphereX = Math.cos(lat) * Math.sin(lon);
+  const sphereY = Math.sin(lat);
+  const sphereZ = Math.cos(lat) * Math.cos(lon);
+  const rotatedY = sphereY * Math.cos(pitch) - sphereZ * Math.sin(pitch);
+  const rotatedZ = sphereY * Math.sin(pitch) + sphereZ * Math.cos(pitch);
   return {
-    x: CENTER_X + RADIUS * Math.cos(lat) * Math.sin(lon),
-    y: CENTER_Y - RADIUS * Math.sin(lat),
-    depth: Math.cos(lat) * Math.cos(lon),
+    x: CENTER_X + RADIUS * sphereX,
+    y: CENTER_Y - RADIUS * rotatedY,
+    depth: rotatedZ,
   };
 }
 
-function liveCoverageCell(
+function latitudeLine(latitude: number, orientation: GlobeOrientation): string {
+  return Array.from({ length: 73 }, (_, index) => {
+    const point = project(-180 + index * 5, latitude, orientation);
+    return `${point.x.toFixed(2)},${point.y.toFixed(2)}`;
+  }).join(" ");
+}
+
+function coverageOrientation(
   pose: Matrix4 | undefined,
   target: [number, number, number] | undefined,
-): { azimuthBin: number; latitude: CaptureCoverageLatitude } | undefined {
+): GlobeOrientation | undefined {
   if (!pose || !target) return undefined;
   const delta = [pose[0][3] - target[0], pose[1][3] - target[1], pose[2][3] - target[2]];
   const horizontal = Math.hypot(delta[0], delta[2]);
   if (!(horizontal > 0.05)) return undefined;
   const longitude = Math.atan2(delta[0], delta[2]) * 180 / Math.PI;
-  const normalized = (longitude + 180) / 360;
-  const azimuthBin = Math.min(LONGITUDE_SECTORS - 1, Math.max(0, Math.floor(normalized * LONGITUDE_SECTORS)));
   const elevation = Math.atan2(delta[1], horizontal) * 180 / Math.PI;
-  return { azimuthBin, latitude: latitudeForElevation(elevation) };
+  return { longitude, elevation: Math.max(-45, Math.min(90, elevation)) };
+}
+
+function coverageCell(orientation: GlobeOrientation) {
+  const normalized = (orientation.longitude + 180) / 360;
+  const latitude = latitudeForElevation(orientation.elevation);
+  return {
+    azimuthBin: latitude === "high"
+      ? 0
+      : Math.min(LONGITUDE_SECTORS - 1, Math.max(0, Math.floor(normalized * LONGITUDE_SECTORS))),
+    latitude,
+  };
 }
 
 function nextTargetCell(
@@ -184,8 +228,8 @@ function normalizeDegrees(value: number): number {
 }
 
 function latitudeLabel(latitude: CaptureCoverageLatitude): string {
-  if (latitude === "raised") return "raised";
-  if (latitude === "high") return "high";
-  if (latitude === "low") return "low";
-  return "level";
+  if (latitude === "raised") return "above";
+  if (latitude === "high") return "top";
+  if (latitude === "low") return "slightly below";
+  return "horizon";
 }

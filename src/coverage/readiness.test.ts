@@ -5,7 +5,7 @@ import type {
   VisualTrackingEdge,
   VisualTrackingReport,
 } from "../shared/types";
-import { analyzeCaptureReadiness, summarizeCaptureReadiness } from "./readiness";
+import { analyzeCaptureReadiness, locateCoverageCell, summarizeCaptureReadiness } from "./readiness";
 
 describe("capture readiness", () => {
   it("marks a connected closed orbit with full azimuth and elevation coverage ready", () => {
@@ -147,9 +147,42 @@ describe("capture readiness", () => {
       (cell) => cell.azimuthBin === current?.azimuthBin && cell.latitude === current?.latitude,
     );
 
-    expect(captured.metrics.coverageCheckpointsRequired).toBe(28);
+    expect(captured.metrics.coverageCheckpointsRequired).toBe(25);
     expect(sampledCell).toMatchObject({ frameCount: 3, stableFrameCount: 1, state: "sampled" });
     expect(capturedCell).toMatchObject({ frameCount: 4, stableFrameCount: 2, state: "captured" });
+  });
+
+  it("retains at most the ten sharpest stationary images in a coverage cell", () => {
+    const frames = orbitFrames(12, () => ({ angle: 0, elevation: 0 })).map((frame, index) => ({
+      ...frame,
+      quality: {
+        ...frame.quality,
+        blurScore: 0.01 * index,
+        motionScore: 0.2,
+      },
+    }));
+    const report = analyzeCaptureReadiness({ frames, decisions: [] });
+    const current = report.metrics.currentCoverageCell;
+    const cell = report.metrics.coverageCells?.find(
+      (candidate) => candidate.azimuthBin === current?.azimuthBin && candidate.latitude === current?.latitude,
+    );
+
+    expect(cell?.selectedFrameIds).toHaveLength(10);
+    expect(cell?.selectedFrameIds).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it("treats the top layer as one azimuth-independent checkpoint", () => {
+    const left = orbitFrames(1, () => ({ angle: 0, elevation: 60 }))[0];
+    const right = orbitFrames(1, () => ({ angle: Math.PI, elevation: 60 }))[0];
+
+    expect(locateCoverageCell(left.cameraToWorld, [0, 0, 0])).toMatchObject({
+      azimuthBin: 0,
+      latitude: "high",
+    });
+    expect(locateCoverageCell(right.cameraToWorld, [0, 0, 0])).toMatchObject({
+      azimuthBin: 0,
+      latitude: "high",
+    });
   });
 });
 

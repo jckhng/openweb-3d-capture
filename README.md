@@ -31,7 +31,7 @@ Then open `http://localhost:5173` in Chrome on the USB-connected phone. `localho
 M2 test sequence:
 
 1. Confirm `immersive-ar`, OPFS, and the relevant sensor capabilities.
-2. Select **Start XR** and grant requested permissions.
+2. Select **Open camera** and grant requested permissions. Center the object before selecting **Start capture**; opening XR no longer begins recording.
 3. Confirm pose, projection matrix, intrinsics, and frame rate change live.
 4. Center a static, textured object at least 45 cm from the phone. Confirm the live target-distance value is plausible, then select **Start capture**.
 5. Move to the highlighted translucent-globe sector. Movement is navigation only; the app does not expect a sharp keyframe while walking.
@@ -43,7 +43,11 @@ M2 test sequence:
 
 Exports with synchronized CPU depth now include a voxel-downsampled `pointcloud.ply` and reference it through `ply_file_path` in `transforms.json`. This supplies the initial point cloud required by Spirula Studio.
 
-During capture, a translucent 12-longitude by 4-latitude globe rotates with the camera. Twenty-eight required checkpoints light only after two sharp, low-motion images are retained at that viewpoint. After capture, the app reports one of `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`. The report checks image availability and synchronization, sharpness, orbit coverage, elevation diversity, visual connectivity, weak adjacent bridges, and loop return. It is saved as `preflight/readiness.json` in the canonical archive.
+During capture, a translucent 12-longitude by 4-layer globe rotates continuously with the live WebXR azimuth and elevation. Uncaptured cells are light blue, the active cell is blue, and completed cells are orange; reverse-side cells remain visible. The 25 required checkpoints comprise six slightly-below views, twelve horizon views, six above views, and one top view. A checkpoint lights only after two sharp, low-motion images are retained.
+
+Stopping first marks the capture durable in OPFS and exposes it in the capture library. Deferred visual analysis runs afterward. The UI explicitly reports when the photos are safe; leaving at that point preserves the capture but may skip final connectivity checks.
+
+After capture, the app reports `READY FOR SFM`, `ADD VIEWS`, or `CAPTURE RISK`. The report checks image synchronization, sharpness, coverage, elevation diversity, visual connectivity, weak bridges, and loop return, and is stored as `preflight/readiness.json`.
 
 Three export buttons are available:
 
@@ -51,7 +55,7 @@ Three export buttons are available:
 - **Spirula ZIP** contains reconstruction images, provenance, readiness report, and instructions for Spirula's Create Dataset from Photos/Video workflow. Images are checkpoint-selected when the safety gate passes. The package intentionally omits root reconstruction markers so native SfM runs.
 - **LichtFeld ZIP** contains reconstruction images, provenance, readiness report, and instructions for the COLMAP Reconstruction plugin. Images are checkpoint-selected when the safety gate passes. The package intentionally contains no fabricated COLMAP model.
 
-Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. Checkpoint-only export requires at least 50 selected images spanning all 12 azimuth sectors; otherwise the exporter includes every image so downstream SfM can recover the incomplete capture. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
+Both destination packages preserve WebXR poses under `open3dcapture/telemetry/frames.jsonl` but declare downstream SfM as the final pose authority. Each populated globe cell retains at most its ten sharpest stationary images for destination selection, and the recorder stops admitting frames after that cell reaches its limit. A complete 25-checkpoint capture therefore begins at 50 images without growing indefinitely as sectors are revisited. Incomplete but sufficiently distributed captures use the same bounded sector selection; very sparse captures fall back to every image. The choice and selected frame IDs are recorded in `open3dcapture/export.json`.
 
 Replay the same readiness checks against an existing capture without modifying it:
 

@@ -363,7 +363,7 @@ describe("Nerfstudio serialization", () => {
     const checkpointCoordinates = [
       ...Array.from({ length: 12 }, (_, azimuthBin) => ({ azimuthBin, latitude: "level" as const })),
       ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, latitude: "raised" as const })),
-      ...[0, 3, 6, 9].map((azimuthBin) => ({ azimuthBin, latitude: "high" as const })),
+      { azimuthBin: 0, latitude: "high" as const },
       ...[0, 2, 4, 6, 8, 10].map((azimuthBin) => ({ azimuthBin, latitude: "low" as const })),
     ];
     const selectedFrames = checkpointCoordinates.flatMap((_, checkpointIndex) => (
@@ -424,8 +424,8 @@ describe("Nerfstudio serialization", () => {
             selectedFrameIds: [checkpointIndex * 2, checkpointIndex * 2 + 1],
             state: "captured",
           })),
-          coverageCheckpointsCompleted: 28,
-          coverageCheckpointsRequired: 28,
+          coverageCheckpointsCompleted: 25,
+          coverageCheckpointsRequired: 25,
           visualConnectedFrames: frames.length,
           visualComponentCount: 1,
           adjacentEdgeCoverage: 1,
@@ -442,9 +442,39 @@ describe("Nerfstudio serialization", () => {
     );
     expect(manifest.imageSelection).toMatchObject({
       mode: "stationary-checkpoints",
-      sourceImageCount: 57,
-      selectedImageCount: 56,
+      sourceImageCount: 51,
+      selectedImageCount: 50,
     });
     expect(files.map((file) => file.path)).not.toContain(movingFrame.imagePath);
+
+    const boundedDataset: CaptureDataset = {
+      ...dataset,
+      readiness: {
+        ...dataset.readiness!,
+        metrics: {
+          ...dataset.readiness!.metrics,
+          coverageCells: [
+            ...dataset.readiness!.metrics.coverageCells!.slice(0, 10),
+            {
+              ...dataset.readiness!.metrics.coverageCells![10],
+              frameCount: 0,
+              stableFrameCount: 0,
+              selectedFrameIds: [],
+              state: "empty",
+            },
+          ],
+          coverageCheckpointsCompleted: 10,
+          coverageCheckpointsRequired: 11,
+        },
+      },
+    };
+    const boundedFiles = buildExportFiles(boundedDataset, "lichtfeld");
+    const boundedManifest = JSON.parse(
+      boundedFiles.find((file) => file.path === "open3dcapture/export.json")!.data as string,
+    );
+    expect(boundedManifest.imageSelection).toMatchObject({
+      mode: "bounded-sectors",
+      selectedImageCount: 20,
+    });
   });
 });

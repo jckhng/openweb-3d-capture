@@ -1,6 +1,7 @@
 import { toNerfstudioTransform } from "../shared/matrix";
 import type {
   CameraCalibration,
+  CaptureCoverageCell,
   CaptureDataset,
   CaptureDecision,
   CaptureFrame,
@@ -47,7 +48,7 @@ export interface PointCloudFile {
 export type ExportProfile = "canonical" | "spirula" | "lichtfeld";
 
 export interface DestinationImageSelection {
-  mode: "stationary-checkpoints" | "all-images-fallback";
+  mode: "stationary-checkpoints" | "bounded-sectors" | "all-images-fallback";
   sourceImageCount: number;
   selectedImageCount: number;
   selectedFrameIds: number[];
@@ -56,6 +57,8 @@ export interface DestinationImageSelection {
 
 const MINIMUM_DESTINATION_CHECKPOINT_IMAGES = 50;
 const MINIMUM_DESTINATION_AZIMUTH_BINS = 12;
+const MINIMUM_BOUNDED_SELECTION_IMAGES = 20;
+const MINIMUM_BOUNDED_SELECTION_AZIMUTH_BINS = 6;
 
 export function buildNerfstudioTransforms(
   frames: CaptureFrame[],
@@ -271,33 +274,39 @@ export function buildExportFiles(
 
 export function selectDestinationImages(dataset: CaptureDataset): DestinationImageSelection {
   const cells = dataset.readiness?.metrics.coverageCells ?? [];
-  const selectedFrameIds = Array.from(new Set(
-    cells
-      .filter((cell) => cell.required && cell.state === "captured")
-      .flatMap((cell) => cell.selectedFrameIds ?? []),
-  )).sort((left, right) => left - right);
-  const selectedIdSet = new Set(selectedFrameIds);
   const availableFrameIds = new Set(
     dataset.frames
       .filter((frame) => frame.imagePath && dataset.images.has(frame.imagePath))
       .map((frame) => frame.id),
   );
-  const availableSelectedIds = selectedFrameIds.filter((id) => availableFrameIds.has(id));
-  const coveredAzimuthBins = new Set(
-    cells
-      .filter((cell) => cell.required && cell.state === "captured" &&
-        (cell.selectedFrameIds ?? []).some((id) => selectedIdSet.has(id) && availableFrameIds.has(id)))
-      .map((cell) => cell.azimuthBin),
-  ).size;
-  const checkpointSetIsSafe = availableSelectedIds.length >= MINIMUM_DESTINATION_CHECKPOINT_IMAGES &&
-    coveredAzimuthBins >= MINIMUM_DESTINATION_AZIMUTH_BINS;
+  const requiredCells = cells.filter((cell) => cell.required && cell.state === "captured");
+  const requiredSelectedIds = selectedIds(requiredCells, availableFrameIds);
+  const requiredAzimuthBins = coveredAzimuthBins(requiredCells, availableFrameIds);
+  const requiredCellCount = cells.filter((cell) => cell.required).length;
+  const checkpointSetIsSafe = requiredCellCount > 0 && requiredCells.length === requiredCellCount &&
+    requiredSelectedIds.length >= MINIMUM_DESTINATION_CHECKPOINT_IMAGES &&
+    requiredAzimuthBins >= MINIMUM_DESTINATION_AZIMUTH_BINS;
   if (checkpointSetIsSafe) {
     return {
       mode: "stationary-checkpoints",
       sourceImageCount: dataset.images.size,
-      selectedImageCount: availableSelectedIds.length,
-      selectedFrameIds: availableSelectedIds,
-      reason: "Selected sharp, low-motion stationary checkpoint bursts with complete azimuth coverage.",
+      selectedImageCount: requiredSelectedIds.length,
+      selectedFrameIds: requiredSelectedIds,
+      reason: "Selected up to ten sharp, low-motion images per required checkpoint with complete coverage.",
+    };
+  }
+  const boundedSelectedIds = selectedIds(cells, availableFrameIds);
+  const boundedAzimuthBins = coveredAzimuthBins(cells, availableFrameIds);
+  if (
+    boundedSelectedIds.length >= MINIMUM_BOUNDED_SELECTION_IMAGES &&
+    boundedAzimuthBins >= MINIMUM_BOUNDED_SELECTION_AZIMUTH_BINS
+  ) {
+    return {
+      mode: "bounded-sectors",
+      sourceImageCount: dataset.images.size,
+      selectedImageCount: boundedSelectedIds.length,
+      selectedFrameIds: boundedSelectedIds,
+      reason: `Coverage is incomplete; selected up to ten sharp, low-motion images per populated sector across ${boundedAzimuthBins} azimuth bins.`,
     };
   }
   const allFrameIds = dataset.frames
@@ -308,17 +317,37 @@ export function selectDestinationImages(dataset: CaptureDataset): DestinationIma
     sourceImageCount: dataset.images.size,
     selectedImageCount: dataset.images.size,
     selectedFrameIds: allFrameIds,
-    reason: `Checkpoint selection retained ${availableSelectedIds.length}/${MINIMUM_DESTINATION_CHECKPOINT_IMAGES} required images across ${coveredAzimuthBins}/${MINIMUM_DESTINATION_AZIMUTH_BINS} azimuth bins; exported all images for downstream SfM recovery.`,
+    reason: `Only ${boundedSelectedIds.length} stationary sector images across ${boundedAzimuthBins} azimuth bins were available; exported all images for downstream SfM recovery.`,
   };
+}
+
+function selectedIds(
+  cells: CaptureCoverageCell[],
+  availableFrameIds: ReadonlySet<number>,
+): number[] {
+  return Array.from(new Set(cells.flatMap((cell) => cell.selectedFrameIds ?? [])))
+    .filter((id) => availableFrameIds.has(id))
+    .sort((left, right) => left - right);
+}
+
+function coveredAzimuthBins(
+  cells: CaptureCoverageCell[],
+  availableFrameIds: ReadonlySet<number>,
+): number {
+  return new Set(
+    cells
+      .filter((cell) => (cell.selectedFrameIds ?? []).some((id) => availableFrameIds.has(id)))
+      .map((cell) => cell.azimuthBin),
+  ).size;
 }
 
 function destinationInstructions(
   profile: Exclude<ExportProfile, "canonical">,
   imageSelection: DestinationImageSelection,
 ): string {
-  const selectionNote = imageSelection.mode === "stationary-checkpoints"
-    ? `The images directory contains ${imageSelection.selectedImageCount} sharp stationary checkpoint frames selected from ${imageSelection.sourceImageCount} source images.`
-    : `The checkpoint set was incomplete, so the images directory contains all ${imageSelection.sourceImageCount} source images for downstream SfM recovery.`;
+  const selectionNote = imageSelection.mode === "all-images-fallback"
+    ? `The sector sample was too sparse to filter safely, so the images directory contains all ${imageSelection.sourceImageCount} source images.`
+    : `The images directory contains ${imageSelection.selectedImageCount} sharp stationary sector frames selected from ${imageSelection.sourceImageCount} source images.`;
   if (profile === "spirula") {
     return [
       "Open Web 3D Capture — Spirula Studio handoff",

@@ -1,5 +1,10 @@
 import { exportDatasetZip, type ExportProfile } from "../dataset/zip";
-import { analyzeCaptureReadiness, summarizeCaptureReadiness } from "../coverage/readiness";
+import {
+  analyzeCaptureReadiness,
+  locateCoverageCell,
+  MAXIMUM_SELECTED_FRAMES_PER_CELL,
+  summarizeCaptureReadiness,
+} from "../coverage/readiness";
 import {
   DEFAULT_QUALITY_SELECTOR_CONFIG,
   QualityKeyframeSelector,
@@ -55,6 +60,7 @@ interface ActiveCapture {
   imuStartIndex: number;
   inFlight: boolean;
   stopping: boolean;
+  durableStatus?: "complete" | "incomplete";
   pendingWrite?: Promise<void>;
   readinessFrames: CaptureFrame[];
   readinessDecisions: CaptureDecision[];
@@ -116,6 +122,7 @@ export interface DiagnosticSnapshot {
   captureReadiness?: CaptureReadinessReport;
   lastReadiness?: CaptureReadinessReport;
   lastCaptureId?: string;
+  captureFinalization?: "saving" | "saved" | "refining";
   lastImageStatus: string;
   lastError?: string;
 }
@@ -298,6 +305,9 @@ export class XRDiagnosticController {
     const active = this.activeCapture;
     if (!active) throw new Error("No capture is running");
     active.stopping = true;
+    this.snapshot.captureFinalization = "saving";
+    this.emit();
+    await this.markCaptureDurable(active, "complete");
     await active.pendingWrite;
     if (this.activeCapture !== active) return;
     await this.finalizeActiveCapture(active, "complete");
@@ -344,6 +354,8 @@ export class XRDiagnosticController {
     this.snapshot.captureProgress = { current: 0, target };
     this.snapshot.captureQuality = createQualityTelemetry();
     this.snapshot.captureReadiness = undefined;
+    this.snapshot.lastReadiness = undefined;
+    this.snapshot.captureFinalization = undefined;
     this.visualTracker.reset();
     this.snapshot.lastError = undefined;
     this.emit();
@@ -478,6 +490,7 @@ export class XRDiagnosticController {
         targetDistance: input.depth?.targetDistance,
       });
       decision = active.checkpointBurst?.evaluate(decision) ?? decision;
+      decision = this.enforceCoverageCellLimit(decision);
       if (decision.accepted) decision.acceptedFrameId = active.frames;
       this.updateQualityTelemetry(decision);
       const rejectedPreview = decision.accepted || !image || candidateId % REJECTED_PREVIEW_INTERVAL !== 0
@@ -589,9 +602,26 @@ export class XRDiagnosticController {
     else if (decision.reason === "low-texture") telemetry.rejectedLowTexture += 1;
     else if (decision.reason === "too-close") telemetry.rejectedTooClose += 1;
     else if (decision.reason === "motion") telemetry.rejectedMotion += 1;
-    else if (decision.reason === "redundant") telemetry.rejectedRedundant += 1;
+    else if (decision.reason === "redundant" || decision.reason === "sector-full") {
+      telemetry.rejectedRedundant += 1;
+    }
     else if (decision.reason === "tracking") telemetry.rejectedTracking += 1;
     else telemetry.rejectedImage += 1;
+  }
+
+  private enforceCoverageCellLimit(decision: CaptureDecision): CaptureDecision {
+    if (!decision.accepted) return decision;
+    const readiness = this.snapshot.captureReadiness;
+    const target = readiness?.metrics.targetEstimate;
+    if (!readiness || !target) return decision;
+    const location = locateCoverageCell(decision.cameraToWorld, target);
+    if (!location) return decision;
+    const cell = readiness.metrics.coverageCells?.find(
+      (candidate) => candidate.azimuthBin === location.azimuthBin &&
+        candidate.latitude === location.latitude,
+    );
+    if (!cell || cell.selectedFrameIds.length < MAXIMUM_SELECTED_FRAMES_PER_CELL) return decision;
+    return { ...decision, accepted: false, reason: "sector-full" };
   }
 
   private readDepth(frame: XRFrame, view: XRView): DepthCapture | null {
@@ -775,7 +805,7 @@ export class XRDiagnosticController {
     this.snapshot.trackingState = "session ended";
     this.imu.stop();
     const interrupted = this.activeCapture;
-    if (interrupted) {
+    if (interrupted && !interrupted.stopping) {
       void this.finalizeInterruptedCapture(interrupted).catch((error: unknown) => {
         this.snapshot.lastError = error instanceof Error
           ? error.message
@@ -788,45 +818,88 @@ export class XRDiagnosticController {
 
   private async finalizeInterruptedCapture(active: ActiveCapture): Promise<void> {
     active.stopping = true;
+    this.snapshot.captureFinalization = "saving";
+    this.emit();
+    await this.markCaptureDurable(active, "incomplete");
     await active.pendingWrite;
     if (this.activeCapture !== active) return;
     await this.finalizeActiveCapture(active, "incomplete");
   }
 
   private async finalizeActiveCapture(active: ActiveCapture, status: "complete" | "incomplete"): Promise<void> {
+    this.snapshot.captureFinalization = active.durableStatus ? "saved" : "saving";
+    this.emit();
+    await this.markCaptureDurable(active, status);
     const samples = this.imu.getSamples(active.imuStartIndex);
     await this.persistence.appendImu(active.id, samples);
-    if (active.selector) {
-      const visualTracking = await this.visualTracker.finish();
-      await this.persistence.saveVisualTracking(active.id, visualTracking);
-      this.snapshot.visualTracking = visualTracking;
-    }
+    const preliminaryReadiness = analyzeCaptureReadiness({
+      frames: active.readinessFrames,
+      decisions: active.readinessDecisions,
+      visualTracking: this.snapshot.visualTracking,
+    });
+    await this.persistence.saveCaptureReadiness(active.id, preliminaryReadiness);
     const finalizedMetadata: CaptureMetadata = {
       ...active.metadata,
       frameCount: active.frames,
       hasImu: samples.length > 0,
       status,
       updatedAt: new Date().toISOString(),
+      readiness: summarizeCaptureReadiness(preliminaryReadiness),
     };
     await this.persistence.finalizeCapture(active.id, finalizedMetadata);
-    const dataset = await this.persistence.loadCapture(active.id);
-    const readiness = analyzeCaptureReadiness(dataset);
-    await this.persistence.saveCaptureReadiness(active.id, readiness);
-    finalizedMetadata.readiness = summarizeCaptureReadiness(readiness);
-    await this.persistence.finalizeCapture(active.id, finalizedMetadata);
+    this.snapshot.lastReadiness = preliminaryReadiness;
+    this.snapshot.captureFinalization = active.selector ? "refining" : "saved";
+    this.emit();
+
+    try {
+      if (active.selector) {
+        const visualTracking = await this.visualTracker.finish();
+        await this.persistence.saveVisualTracking(active.id, visualTracking);
+        this.snapshot.visualTracking = visualTracking;
+        const finalReadiness = analyzeCaptureReadiness({
+          frames: active.readinessFrames,
+          decisions: active.readinessDecisions,
+          visualTracking,
+        });
+        await this.persistence.saveCaptureReadiness(active.id, finalReadiness);
+        finalizedMetadata.readiness = summarizeCaptureReadiness(finalReadiness);
+        finalizedMetadata.updatedAt = new Date().toISOString();
+        await this.persistence.finalizeCapture(active.id, finalizedMetadata);
+        this.snapshot.lastReadiness = finalReadiness;
+      }
+    } finally {
+      if (this.activeCapture === active) this.activeCapture = undefined;
+      this.snapshot.captureFinalization = undefined;
+      this.emit();
+    }
+  }
+
+  private async markCaptureDurable(
+    active: ActiveCapture,
+    status: "complete" | "incomplete",
+  ): Promise<void> {
+    const firstDurableWrite = !active.durableStatus;
+    const metadata: CaptureMetadata = {
+      ...active.metadata,
+      frameCount: active.frames,
+      status,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.persistence.finalizeCapture(active.id, metadata);
+    if (!firstDurableWrite) return;
+    active.durableStatus = status;
     this.lastCaptureId = active.id;
     this.snapshot.lastCaptureId = active.id;
     this.snapshot.captureId = undefined;
     this.snapshot.captureMode = undefined;
     this.snapshot.captureReadiness = undefined;
-    this.snapshot.lastReadiness = readiness;
-    this.activeCapture = undefined;
+    this.snapshot.captureFinalization = "saved";
     this.emit();
   }
 
   private updateLiveReadiness(visualTracking: VisualTrackingReport): void {
     const active = this.activeCapture;
-    if (!active?.selector) return;
+    if (!active?.selector || active.stopping) return;
     this.snapshot.captureReadiness = analyzeCaptureReadiness({
       frames: active.readinessFrames,
       decisions: active.readinessDecisions,
