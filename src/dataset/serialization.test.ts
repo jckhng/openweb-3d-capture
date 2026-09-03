@@ -133,6 +133,15 @@ describe("Nerfstudio serialization", () => {
           previewMotionScore: 0.01,
         },
         camera: { focusMode: "continuous", burstSize: 3, selectedBurstIndex: 1 },
+        captureGuidance: {
+          source: "webxr",
+          poseSynchronized: false,
+          azimuthBin: 3,
+          latitude: "level",
+          elevation: 18,
+          centered: true,
+          trackingState: "tracked",
+        },
       }],
     };
 
@@ -140,6 +149,9 @@ describe("Nerfstudio serialization", () => {
     const transforms = JSON.parse(canonical.find((file) => file.path === "transforms.json")!.data as string);
     expect(transforms.frames).toEqual([]);
     expect(canonical.map((file) => file.path)).toContain("telemetry/photos.jsonl");
+    const photoTelemetry = JSON.parse(canonical.find((file) => file.path === "telemetry/photos.jsonl")!.data as string);
+    expect(photoTelemetry.captureGuidance).toMatchObject({ source: "webxr", poseSynchronized: false });
+    expect(photoTelemetry).not.toHaveProperty("cameraToWorld");
 
     const destination = buildExportFiles(dataset, "spirula");
     const manifest = JSON.parse(destination.find((file) => file.path === "open3dcapture/export.json")!.data as string);

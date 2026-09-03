@@ -1,5 +1,9 @@
 import { matchImageFeatures, type ImageFeature } from "../refinement/features";
-import type { CaptureCoverageCell, CaptureCoverageLatitude } from "../shared/types";
+import type {
+  CaptureCoverageCell,
+  CaptureCoverageLatitude,
+  PhotoCaptureGuidance,
+} from "../shared/types";
 
 export const PHOTO_CHECKPOINT_COUNT = 25;
 export const PHOTO_IMAGES_PER_CHECKPOINT = 2;
@@ -28,6 +32,12 @@ export interface PhotoOverlapMetrics {
   referencePhotoId?: number;
 }
 
+export interface PhotoCoverageSample {
+  photoId: number;
+  azimuthBin: number;
+  latitude: CaptureCoverageLatitude;
+}
+
 export function buildPhotoCoverageCells(photoCount: number): CaptureCoverageCell[] {
   return CHECKPOINTS.map((checkpoint, index) => {
     const firstPhoto = index * PHOTO_IMAGES_PER_CHECKPOINT;
@@ -47,6 +57,44 @@ export function buildPhotoCoverageCells(photoCount: number): CaptureCoverageCell
         : frameCount > 0 ? "sampled" : "empty",
     };
   });
+}
+
+export function buildTrackedPhotoCoverageCells(
+  samples: readonly PhotoCoverageSample[],
+): CaptureCoverageCell[] {
+  return CHECKPOINTS.map((checkpoint) => {
+    const matching = samples.filter((sample) => (
+      sample.azimuthBin === checkpoint.azimuthBin && sample.latitude === checkpoint.latitude
+    ));
+    const frameCount = Math.min(PHOTO_IMAGES_PER_CHECKPOINT, matching.length);
+    return {
+      ...checkpoint,
+      required: true,
+      frameCount,
+      stableFrameCount: frameCount,
+      bestSharpness: 0,
+      selectedFrameIds: matching.slice(0, PHOTO_IMAGES_PER_CHECKPOINT).map((sample) => sample.photoId),
+      state: frameCount >= PHOTO_IMAGES_PER_CHECKPOINT
+        ? "captured"
+        : frameCount > 0 ? "sampled" : "empty",
+    };
+  });
+}
+
+export function trackedPhotoPrompt(
+  guidance: PhotoCaptureGuidance | undefined,
+  cells: readonly CaptureCoverageCell[],
+): string {
+  if (!guidance) return "XR GUIDE UNAVAILABLE — keep this screen open or save the partial set.";
+  if (guidance.trackingState !== "tracked") return "WAIT FOR XR TRACKING — move the phone slowly across textured surroundings.";
+  if (!guidance.centered) return "RE-CENTER OBJECT — keep it inside the reticle.";
+  const cell = cells.find((candidate) => (
+    candidate.latitude === guidance.latitude && candidate.azimuthBin === guidance.azimuthBin
+  ));
+  if (!cell) return "MOVE TO A BLUE CHECKPOINT — this angle lies between required sectors.";
+  if (cell.state === "captured") return "SECTOR COMPLETE — move to another blue checkpoint.";
+  if (cell.state === "sampled") return "VIEW 1 / 2 SAVED — take a small sideways step within this blue sector.";
+  return "BLUE SECTOR READY — keep overlap, stop, and hold the object centered.";
 }
 
 export function currentPhotoCheckpoint(photoCount: number) {

@@ -8,7 +8,7 @@
 - A static, textured, medium-sized subject at least 45 cm from the camera.
 - Bright, even light and enough clear space to move around the subject safely.
 
-Small close-range subjects are outside the calibrated web path. ARCore commonly fixes focus during WebXR and the web API cannot request autofocus or choose another lens.
+Small close-range subjects are outside the calibrated WebXR path. The autofocus-only mode is available but uncalibrated. The XR-assisted autofocus option is a device/browser compatibility probe, not a supported baseline.
 
 ## Before starting
 
@@ -33,6 +33,18 @@ The app does not upload capture data. Images, depth, poses, and diagnostics stay
 10. Finish only when all 25 required cells are orange and the result is **READY FOR SFM**.
 
 Coverage is based on camera position relative to the estimated object. Merely tilting the phone without moving it does not add the parallax required by reconstruction.
+
+## XR-assisted autofocus probe
+
+1. Record the build timestamp, then select **Try XR-assisted autofocus**.
+2. If the app reports fallback, record the complete error. Confirm that the ordinary autofocus preview reopened and remains usable.
+3. If it passes, confirm the HUD reports XR tracking `tracked`, nonzero XR FPS, autofocus stream `live`, and `continuous` or `single-shot` focus where supported.
+4. Center the subject. If XR centre depth is unavailable, select the nearest camera-to-object-centre distance before starting. Start the photo scan, walk through at least four adjacent level sectors, and capture two views in each.
+5. Confirm the globe follows physical position around the object, photographs fill the sector occupied at capture time, and tilting in place does not advance around the orbit.
+6. Confirm close details are sharper than WebXR mode. Watch for focus hunting, a frozen preview, XR tracking loss, unexpected lens/FOV changes, or `takePhoto()` failure.
+7. Finish and export the Archive ZIP. In `telemetry/photos.jsonl`, confirm each guided image has a coarse `captureGuidance` record with `poseSynchronized: false` and no camera matrix.
+
+A passed startup probe does not establish full compatibility. A complete-orbit capture and downstream registration result are required before enabling this mode by default.
 
 ## Export and reconstruction
 

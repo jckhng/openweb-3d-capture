@@ -133,6 +133,8 @@ export interface DiagnosticSnapshot {
   depthScale?: number;
   targetDistance?: number;
   targetFraming?: TargetFraming;
+  guidanceTarget?: NonNullable<CaptureMetadata["target"]>;
+  guidanceFraming?: TargetFraming;
   captureMap?: CaptureMapSnapshot;
   imuSampleRate: number;
   imuStatus: string;
@@ -236,6 +238,12 @@ export class XRDiagnosticController {
       targetFraming: this.snapshot.targetFraming
         ? { ...this.snapshot.targetFraming, ndc: [...this.snapshot.targetFraming.ndc] }
         : undefined,
+      guidanceTarget: this.snapshot.guidanceTarget
+        ? { ...this.snapshot.guidanceTarget, worldPoint: [...this.snapshot.guidanceTarget.worldPoint] }
+        : undefined,
+      guidanceFraming: this.snapshot.guidanceFraming
+        ? { ...this.snapshot.guidanceFraming, ndc: [...this.snapshot.guidanceFraming.ndc] }
+        : undefined,
       captureMap: this.snapshot.captureMap
         ? { ...this.snapshot.captureMap, points: this.snapshot.captureMap.points.map((point) => ({ ...point })) }
         : undefined,
@@ -327,6 +335,31 @@ export class XRDiagnosticController {
 
   async startBasicCapture(): Promise<void> {
     await this.beginCapture("object");
+  }
+
+  lockGuidanceTarget(assumedDistanceMeters = 0.3): NonNullable<CaptureMetadata["target"]> {
+    if (!this.session || !this.snapshot.running) {
+      throw new Error("XR guidance is no longer active; reopen the experimental mode");
+    }
+    const target = lockTarget(
+      this.snapshot.pose,
+      this.snapshot.targetDistance,
+      new Date().toISOString(),
+      assumedDistanceMeters,
+    );
+    if (!target) throw new Error("Wait for stable XR tracking before starting the autofocus scan");
+    this.snapshot.guidanceTarget = target;
+    this.snapshot.guidanceFraming = this.snapshot.pose && this.snapshot.projectionMatrix
+      ? projectTarget(target.worldPoint, this.snapshot.pose, this.snapshot.projectionMatrix)
+      : undefined;
+    this.emit();
+    return { ...target, worldPoint: [...target.worldPoint] };
+  }
+
+  clearGuidanceTarget(): void {
+    this.snapshot.guidanceTarget = undefined;
+    this.snapshot.guidanceFraming = undefined;
+    this.emit();
   }
 
   async stopCapture(): Promise<void> {
@@ -510,6 +543,9 @@ export class XRDiagnosticController {
       ? projectTarget(active.targetPoint, cameraToWorld, projectionMatrix)
       : undefined;
     this.snapshot.targetFraming = targetFraming;
+    this.snapshot.guidanceFraming = this.snapshot.guidanceTarget
+      ? projectTarget(this.snapshot.guidanceTarget.worldPoint, cameraToWorld, projectionMatrix)
+      : undefined;
     const belowTarget = active?.target === undefined || active.frames < active.target;
     if (
       active &&
@@ -947,6 +983,8 @@ export class XRDiagnosticController {
     this.referenceSpace = undefined;
     this.snapshot.running = false;
     this.snapshot.trackingState = "session ended";
+    this.snapshot.guidanceTarget = undefined;
+    this.snapshot.guidanceFraming = undefined;
     this.imu.stop();
     const interrupted = this.activeCapture;
     if (interrupted && !interrupted.stopping) {
@@ -1115,10 +1153,11 @@ function emptyFrameQuality(): CaptureFrame["quality"] {
   return { blurScore: 0, motionScore: 0, noveltyScore: 0, coverageGain: 0 };
 }
 
-function lockTarget(
+export function lockTarget(
   cameraToWorld: Matrix4 | undefined,
   measuredDistance: number | undefined,
   lockedAt: string,
+  assumedDistanceMeters = ASSUMED_TARGET_DISTANCE_METERS,
 ): NonNullable<CaptureMetadata["target"]> | undefined {
   if (!cameraToWorld || cameraToWorld.length < 3 || cameraToWorld.some((row) => row.length < 4)) {
     return undefined;
@@ -1127,7 +1166,7 @@ function lockTarget(
   if (!values.every(Number.isFinite)) return undefined;
   const distanceMeters = measuredDistance && measuredDistance >= 0.1 && measuredDistance <= 10
     ? measuredDistance
-    : ASSUMED_TARGET_DISTANCE_METERS;
+    : assumedDistanceMeters;
   const worldPoint: [number, number, number] = [
     cameraToWorld[0][3] - cameraToWorld[0][2] * distanceMeters,
     cameraToWorld[1][3] - cameraToWorld[1][2] * distanceMeters,

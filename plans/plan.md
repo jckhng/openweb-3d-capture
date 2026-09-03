@@ -105,14 +105,19 @@ Implemented:
 * autofocus move → ready → focus → settle → burst → select → overlap → save state machine with reticle progress, haptic accept/reject feedback, and last-winner preview
 * optional automatic autofocus capture after detected movement followed by a stable, sharp, textured preview
 * local BRIEF feature matching against accepted photographs to reject near-duplicate views and weak-overlap jumps without fabricating camera poses
-* device-orientation-responsive autofocus globe presentation; it remains a manual guide and is not exported as pose or measured coverage
+* scripted autofocus-only globe progress map that advances from accepted-image count and does not pretend to track physical camera motion
+* experimental XR-assisted autofocus capability probe that starts WebXR before `getUserMedia()`, verifies both remain live, and reopens autofocus-only mode when concurrent camera ownership fails
+* XR target lock and object-relative autofocus globe guidance with actual accepted-photo counts per required sector
+* close-object target locking from XR centre depth with an explicit 20/30/45/60 cm fallback when depth is unavailable, avoiding the one-metre WebXR default used for medium objects
+* coarse per-photo XR guidance labels explicitly marked `poseSynchronized: false`; WebXR matrices are never attached to autofocus photographs
+* live XR frame-rate, tracking, autofocus-stream, and focus-mode diagnostics included in the capture HUD and copyable tester report
 * landscape capture HUDs moved into a narrow right-side rail so WebXR and autofocus controls do not obscure the central subject
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (90 tests)
+npm test        PASS (94 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -813,7 +818,7 @@ Properties:
 * requests supported continuous or single-shot autofocus and center metering
 * waits for a stable preview, captures up to three full-resolution photographs, and keeps the sharpest acceptable result
 * records available focus/exposure settings and rejects motion, low-detail, and soft results
-* uses the same 25-checkpoint translucent globe as a manual, device-orientation-responsive navigation sequence because no pose is available to measure coverage
+* uses the same 25-checkpoint translucent globe as a scripted navigation sequence because no pose is available to measure coverage; it advances only from accepted-image count
 * separates movement from acquisition with live move/hold/focus/burst/select/check/save feedback, optional automatic capture, haptics, and retained-winner confirmation
 * rejects visually near-duplicate photographs and low-overlap jumps using local feature matching and normalized feature displacement; this is an image heuristic, not pose recovery or proof of geometric coverage
 
@@ -825,7 +830,9 @@ Status: implemented in the web application and covered by 90 automated tests. Ta
 
 Concurrent or interleaved WebXR and `getUserMedia()` capture has unresolved camera ownership, frame-time alignment, lens-state, intrinsics, and relocalization risks. A two-pass variant may use WebXR to survey an orbit and then capture autofocus photographs, but the photographs still require visual registration.
 
-Do not make this hybrid the product foundation without measured cross-stream synchronization and calibration evidence.
+Status: a capability-gated XR-assisted autofocus probe is implemented. It requests WebXR first, opens the ordinary autofocus stream, verifies both remain live, exposes both statuses in the HUD, and falls back to autofocus-only mode on immediate failure. When it survives, XR drives object-relative coverage and centering guidance only. Accepted photographs remain unposed and retain only a coarse sector/elevation label marked unsynchronized.
+
+Do not make this hybrid the product foundation without target-phone evidence that XR tracking, actual autofocus behavior, still capture, close-range sharpness, and camera identity remain stable for a complete orbit.
 
 ### Native precision mode — post-v1 candidate
 

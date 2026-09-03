@@ -3,12 +3,21 @@ import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
 import { analyzeTargetImageQuality, type ImageQualityAnalysis } from "../quality/sharpness";
 import { extractBriefFeatures } from "../refinement/features";
 import { BUILD_TIMESTAMP } from "../shared/build";
-import type { CaptureMetadata, UnposedPhoto } from "../shared/types";
+import type {
+  CaptureCoverageCell,
+  CaptureMetadata,
+  PhotoCaptureGuidance,
+  UnposedPhoto,
+} from "../shared/types";
 import { makeCaptureId, type CapturePersistence } from "../storage/storage";
 import {
   measurePhotoOverlap,
   photoCapturePrompt,
+  buildPhotoCoverageCells,
+  buildTrackedPhotoCoverageCells,
   PHOTO_TARGET,
+  trackedPhotoPrompt,
+  type PhotoCoverageSample,
   type PhotoFeatureSignature,
   type PhotoOverlapMetrics,
 } from "./photo-guidance";
@@ -51,6 +60,10 @@ export interface PhotoCaptureSnapshot {
   stageProgress: number;
   burstFrame: number;
   automaticCapture: boolean;
+  guidanceMode: "manual" | "webxr";
+  guidance?: PhotoCaptureGuidance;
+  coverageCells: CaptureCoverageCell[];
+  cameraStreamState: "closed" | "live" | "muted" | "ended";
   lastPhotoPreviewUrl?: string;
   instruction: string;
   lastError?: string;
@@ -101,6 +114,8 @@ export class PhotoCaptureController {
   private activeMetadata?: CaptureMetadata;
   private recentSharpness: number[] = [];
   private readonly signatures: Array<{ photoId: number; signature: PhotoFeatureSignature }> = [];
+  private readonly guidanceSamples: PhotoCoverageSample[] = [];
+  private currentGuidance?: PhotoCaptureGuidance;
   private previewTimer?: number;
   private previousPreview?: PreviewSample;
   private movementObserved = true;
@@ -116,6 +131,9 @@ export class PhotoCaptureController {
     stageProgress: 0,
     burstFrame: 0,
     automaticCapture: false,
+    guidanceMode: "manual",
+    coverageCells: buildPhotoCoverageCells(0),
+    cameraStreamState: "closed",
     instruction: "Open the autofocus camera for a close-focus photo scan.",
   };
 
@@ -154,6 +172,9 @@ export class PhotoCaptureController {
       if (!track) throw new Error("No camera video track was returned");
       this.stream = stream;
       this.track = track;
+      track.addEventListener("mute", this.handleTrackMute);
+      track.addEventListener("unmute", this.handleTrackUnmute);
+      track.addEventListener("ended", this.handleTrackEnded);
       this.imageCapture = new ImageCapture(track);
       this.preferredPhotoSettings = await preferredPhotoSettings(this.imageCapture);
       this.video = video;
@@ -169,6 +190,7 @@ export class PhotoCaptureController {
       };
       this.snapshot.focusMode = settings.focusMode ?? this.snapshot.focusMode;
       this.snapshot.focusDistance = settings.focusDistance;
+      this.snapshot.cameraStreamState = track.muted ? "muted" : "live";
       this.snapshot.stage = "idle";
       this.snapshot.stageProgress = 0;
       this.snapshot.instruction = "Center the close subject, then start the photo scan.";
@@ -180,7 +202,7 @@ export class PhotoCaptureController {
     }
   }
 
-  async startCapture(): Promise<void> {
+  async startCapture(guidanceMode: "manual" | "webxr" = "manual"): Promise<void> {
     if (!this.stream || !this.track || !this.imageCapture) {
       throw new Error("Open the autofocus camera first");
     }
@@ -204,6 +226,8 @@ export class PhotoCaptureController {
         poseAuthority: "downstream-sfm",
         imagesAreUnposed: true,
         minimumRecommendedImages: PHOTO_TARGET,
+        guidanceSource: guidanceMode,
+        guidanceOnly: true,
       },
     };
     await this.persistence.createCapture(metadata);
@@ -211,6 +235,7 @@ export class PhotoCaptureController {
     this.activeMetadata = metadata;
     this.recentSharpness = [];
     this.signatures.length = 0;
+    this.guidanceSamples.length = 0;
     this.previousPreview = undefined;
     this.movementObserved = true;
     this.automaticCaptureEligibleAt = Date.now() + 600;
@@ -220,10 +245,13 @@ export class PhotoCaptureController {
     this.snapshot.lastQuality = undefined;
     this.snapshot.liveQuality = undefined;
     this.snapshot.lastOverlap = undefined;
+    this.snapshot.guidanceMode = guidanceMode;
+    this.snapshot.guidance = guidanceMode === "webxr" ? this.currentGuidance : undefined;
+    this.snapshot.coverageCells = buildPhotoCoverageCells(0);
     this.snapshot.stage = "move";
     this.snapshot.stageProgress = 0;
     this.snapshot.burstFrame = 0;
-    this.snapshot.instruction = photoCapturePrompt(0);
+    this.snapshot.instruction = this.capturePrompt();
     this.startPreviewMonitor();
     this.emit();
   }
@@ -235,6 +263,14 @@ export class PhotoCaptureController {
     this.emit();
   }
 
+  setWebXRGuidance(guidance: PhotoCaptureGuidance | undefined): void {
+    this.currentGuidance = guidance ? { ...guidance } : undefined;
+    if (this.snapshot.guidanceMode !== "webxr") return;
+    const previous = this.snapshot.guidance;
+    this.snapshot.guidance = guidance ? { ...guidance } : undefined;
+    if (!sameGuidance(previous, guidance)) this.emit();
+  }
+
   async capturePhoto(): Promise<void> {
     const metadata = this.activeMetadata;
     const imageCapture = this.imageCapture;
@@ -244,6 +280,14 @@ export class PhotoCaptureController {
       throw new Error("Start a photo scan first");
     }
     if (this.snapshot.phase === "capturing") return;
+    const captureGuidance = this.snapshot.guidanceMode === "webxr"
+      ? this.currentGuidance ? { ...this.currentGuidance } : undefined
+      : undefined;
+    const guidanceIssue = this.guidanceIssue(captureGuidance);
+    if (guidanceIssue) {
+      this.reject(guidanceIssue, true);
+      return;
+    }
 
     this.snapshot.phase = "capturing";
     this.snapshot.stage = "focusing";
@@ -362,6 +406,7 @@ export class PhotoCaptureController {
           medianDisplacement: overlap.medianDisplacement,
           referencePhotoId: overlap.referencePhotoId,
         },
+        captureGuidance,
       };
       this.snapshot.stage = "saving";
       this.snapshot.stageProgress = 0.92;
@@ -372,13 +417,23 @@ export class PhotoCaptureController {
       this.recentSharpness.push(selected.quality.sharpnessScore);
       if (this.recentSharpness.length > 24) this.recentSharpness.shift();
       this.snapshot.photoCount += 1;
+      if (captureGuidance) {
+        this.guidanceSamples.push({
+          photoId: id,
+          azimuthBin: captureGuidance.azimuthBin,
+          latitude: captureGuidance.latitude,
+        });
+        this.snapshot.coverageCells = buildTrackedPhotoCoverageCells(this.guidanceSamples);
+      } else {
+        this.snapshot.coverageCells = buildPhotoCoverageCells(this.snapshot.photoCount);
+      }
       this.snapshot.photoResolution = { width: selected.width, height: selected.height };
       this.snapshot.focusMode = settings.focusMode ?? this.snapshot.focusMode;
       this.snapshot.focusDistance = settings.focusDistance;
       this.setLastPhotoPreview(selected.blob);
       this.snapshot.stage = "saved";
       this.snapshot.stageProgress = 1;
-      this.snapshot.instruction = `VIEW SAVED — ${photoCapturePrompt(this.snapshot.photoCount)}`;
+      this.snapshot.instruction = `VIEW SAVED — ${this.capturePrompt()}`;
       this.movementObserved = false;
       this.previousPreview = undefined;
       this.automaticCaptureEligibleAt = Date.now() + 900;
@@ -549,11 +604,17 @@ export class PhotoCaptureController {
   }
 
   private resetCamera(): void {
+    if (this.track) {
+      this.track.removeEventListener("mute", this.handleTrackMute);
+      this.track.removeEventListener("unmute", this.handleTrackUnmute);
+      this.track.removeEventListener("ended", this.handleTrackEnded);
+    }
     this.stream = undefined;
     this.track = undefined;
     this.imageCapture = undefined;
     this.preferredPhotoSettings = undefined;
     this.video = undefined;
+    this.snapshot.cameraStreamState = "closed";
   }
 
   private startPreviewMonitor(): void {
@@ -591,11 +652,15 @@ export class PhotoCaptureController {
         this.snapshot.lastError = undefined;
         this.snapshot.stage = "move";
         this.snapshot.stageProgress = 0;
-        this.snapshot.instruction = photoCapturePrompt(this.snapshot.photoCount);
+        this.snapshot.instruction = this.capturePrompt();
       } else if (!this.movementObserved) {
         this.snapshot.stage = "move";
         this.snapshot.stageProgress = 0;
-        this.snapshot.instruction = photoCapturePrompt(this.snapshot.photoCount);
+        this.snapshot.instruction = this.capturePrompt();
+      } else if (this.guidanceIssue()) {
+        this.snapshot.stage = "move";
+        this.snapshot.stageProgress = 0;
+        this.snapshot.instruction = this.guidanceIssue()!;
       } else if (!detailedEnough) {
         this.snapshot.stage = "move";
         this.snapshot.stageProgress = 0;
@@ -638,10 +703,52 @@ export class PhotoCaptureController {
     this.snapshot.lastPhotoPreviewUrl = undefined;
   }
 
+  private capturePrompt(): string {
+    return this.snapshot.guidanceMode === "webxr"
+      ? trackedPhotoPrompt(this.currentGuidance, this.snapshot.coverageCells)
+      : photoCapturePrompt(this.snapshot.photoCount);
+  }
+
+  private guidanceIssue(guidance = this.currentGuidance): string | undefined {
+    if (this.snapshot.guidanceMode !== "webxr") return undefined;
+    const prompt = trackedPhotoPrompt(guidance, this.snapshot.coverageCells);
+    return prompt.startsWith("BLUE SECTOR READY") || prompt.startsWith("VIEW 1 / 2 SAVED")
+      ? undefined
+      : prompt;
+  }
+
+  private readonly handleTrackMute = (): void => {
+    this.snapshot.cameraStreamState = "muted";
+    this.emit();
+  };
+
+  private readonly handleTrackUnmute = (): void => {
+    this.snapshot.cameraStreamState = "live";
+    this.emit();
+  };
+
+  private readonly handleTrackEnded = (): void => {
+    this.snapshot.cameraStreamState = "ended";
+    this.snapshot.lastError = "Autofocus camera stream ended; save the partial set and reopen autofocus-only mode.";
+    this.snapshot.automaticCapture = false;
+    this.emit();
+  };
+
   private emit(): void {
     const snapshot = this.getSnapshot();
     for (const listener of this.listeners) listener(snapshot);
   }
+}
+
+function sameGuidance(
+  left: PhotoCaptureGuidance | undefined,
+  right: PhotoCaptureGuidance | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.azimuthBin === right.azimuthBin &&
+    left.latitude === right.latitude &&
+    left.centered === right.centered &&
+    left.trackingState === right.trackingState;
 }
 
 function samplePreview(video: HTMLVideoElement, canvas: HTMLCanvasElement): PreviewSample {

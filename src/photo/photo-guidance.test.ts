@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPhotoCoverageCells,
+  buildTrackedPhotoCoverageCells,
   classifyPhotoOverlap,
   currentPhotoCheckpoint,
   PHOTO_TARGET,
+  trackedPhotoPrompt,
 } from "./photo-guidance";
 
 describe("autofocus photo guidance", () => {
@@ -37,5 +39,31 @@ describe("autofocus photo guidance", () => {
       .toBe("low-overlap");
     expect(classifyPhotoOverlap({ matches: 35, matchRatio: 0.16, medianDisplacement: 0.08 }).verdict)
       .toBe("useful");
+  });
+
+  it("fills XR-guided cells by measured sector rather than capture order", () => {
+    const cells = buildTrackedPhotoCoverageCells([
+      { photoId: 0, latitude: "raised", azimuthBin: 4 },
+      { photoId: 1, latitude: "raised", azimuthBin: 4 },
+      { photoId: 2, latitude: "level", azimuthBin: 9 },
+    ]);
+    expect(cells.find((cell) => cell.latitude === "raised" && cell.azimuthBin === 4)?.state)
+      .toBe("captured");
+    expect(cells.find((cell) => cell.latitude === "level" && cell.azimuthBin === 9)?.state)
+      .toBe("sampled");
+    expect(cells[0].state).toBe("empty");
+  });
+
+  it("blocks capture outside a required XR-guided checkpoint", () => {
+    const cells = buildTrackedPhotoCoverageCells([]);
+    expect(trackedPhotoPrompt({
+      source: "webxr",
+      poseSynchronized: false,
+      azimuthBin: 1,
+      latitude: "raised",
+      elevation: 45,
+      centered: true,
+      trackingState: "tracked",
+    }, cells)).toContain("between required sectors");
   });
 });

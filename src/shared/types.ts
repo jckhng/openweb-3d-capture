@@ -141,6 +141,17 @@ export interface UnposedPhoto {
     medianDisplacement: number;
     referencePhotoId?: number;
   };
+  captureGuidance?: PhotoCaptureGuidance;
+}
+
+export interface PhotoCaptureGuidance {
+  source: "webxr";
+  poseSynchronized: false;
+  azimuthBin: number;
+  latitude: CaptureCoverageLatitude;
+  elevation: number;
+  centered: boolean;
+  trackingState: string;
 }
 
 export interface IMUSample {
@@ -255,6 +266,8 @@ export interface CaptureMetadata {
     poseAuthority: "downstream-sfm";
     imagesAreUnposed: true;
     minimumRecommendedImages: number;
+    guidanceSource?: "manual" | "webxr";
+    guidanceOnly?: true;
   };
 }
 
