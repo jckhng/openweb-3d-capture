@@ -1,6 +1,6 @@
 # Open Web 3D Capture
 
-Open Web 3D Capture is an experimental, local-first Android capture app for Gaussian splatting and photogrammetry. It provides a pose-guided WebXR mode for medium objects and an autofocus photo mode for small subjects, then packages the images for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
+Open Web 3D Capture is an experimental, local-first Android capture app for Gaussian splatting and photogrammetry. It provides a pose-guided WebXR mode for medium objects and a Beta autofocus photo mode for small subjects, then packages the images for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
 
 The app is a capture and preflight tool. It does not reconstruct a Gaussian splat or produce final training poses on the phone. WebXR poses drive guidance in WebXR mode and remain available as provenance. Autofocus-mode photos are explicitly unposed. Downstream structure from motion (SfM) remains the final pose authority in both modes.
 
@@ -38,7 +38,7 @@ The static hosting provider still receives ordinary requests for application fil
 
 The 45 cm limit is provisional guidance, not a universal optical specification. ARCore currently defaults to fixed focus on supported cameras, while WebXR Raw Camera Access provides no autofocus, lens-selection, or manual-focus control. Automatic close-range rejection works only when the device supplies usable CPU depth. Without CPU depth, the app cannot measure closeness and places the initial subject estimate 1 m in front of the camera; globe guidance is consequently approximate.
 
-For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, or reconstruction-grade measured coverage. Low-resolution preview features maintain navigation continuity, while relative device orientation stabilizes coarse longitude and elevation when the browser supplies it. Local feature matching rejects views that appear too similar or have too little overlap. None of these signals recovers an exportable camera pose or proves geometric coverage.
+For small or close subjects, use **Open close-focus photos (Beta)**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, or reconstruction-grade measured coverage. Low-resolution preview features maintain navigation continuity, while relative device orientation stabilizes coarse longitude and elevation when the browser supplies it. Local feature matching rejects views that appear too similar or have too little overlap. None of these signals recovers an exportable camera pose or proves geometric coverage.
 
 ## Capture workflow
 
@@ -55,9 +55,9 @@ For small or close subjects, use **Open close-focus photos**. This ordinary-came
 
 Uncaptured cells are light blue, the active cell is blue, and completed cells are orange. The required checkpoints are six low, twelve standard handheld, six raised, and one top checkpoint. On devices with CPU depth, a display-only constellation shows newly observed surface points in blue and multi-view support in orange.
 
-### Close-focus autofocus photos
+### Close-focus autofocus photos (Beta)
 
-1. Select **Open close-focus photos**, center a textured part of the subject in the circular reticle, then select **Start photo scan**.
+1. Select **Open close-focus photos (Beta)**, center a textured part of the subject in the circular reticle, then select **Start photo scan**.
 2. Follow the blue active cell around the translucent globe. Each of its 25 checkpoints needs two accepted photographs. The globe follows a coarse preview visual-navigation estimate instead of advancing by photograph count.
 3. Move between viewpoints, keep the subject inside the reticle, and stop. Select **Arm this viewpoint**, or enable **Auto capture** after starting the scan. The app waits for sufficient detail, sharpness, and stability before taking a burst.
 4. The app retains the sharpest burst image, checks its visual overlap and displacement against accepted photographs, shows the saved winner, and asks for a wider or smaller step when the view is unsuitable.

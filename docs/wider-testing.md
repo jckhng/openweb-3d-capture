@@ -34,9 +34,9 @@ The app does not upload capture data. Images, depth, poses, and diagnostics stay
 
 Coverage is based on camera position relative to the estimated object. Merely tilting the phone without moving it does not add the parallax required by reconstruction.
 
-## Autofocus preview-navigation test
+## Autofocus Beta preview-navigation test
 
-1. Record the build timestamp, select **Open close-focus photos**, center the subject, and start a photo scan.
+1. Record the build timestamp, select **Open close-focus photos (Beta)**, center the subject, and start a photo scan.
 2. Confirm the HUD changes from `initializing` to `tracking`, reports nonzero visual matches, and identifies whether relative device orientation is available.
 3. Walk through at least four adjacent level sectors. Confirm the globe turns with the orbit without advancing merely because a photograph was saved.
 4. Stop at each viewpoint. Confirm feature lock remains `tracking` while stationary, then capture two separated views in each sector.

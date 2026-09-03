@@ -251,7 +251,7 @@ export function App() {
             </strong>
           </div>
           <ol className="capture-steps">
-            <li>Choose WebXR for guided medium-object capture or Autofocus photos for small, close subjects.</li>
+            <li>Choose WebXR for guided medium-object capture or Autofocus photos (Beta) for small, close subjects.</li>
             <li>Use bright, even light and keep the object static.</li>
             <li>Open the selected camera, center the object, then explicitly start capture.</li>
             <li>Move between overlapping viewpoints and stop while each image is acquired.</li>
@@ -270,7 +270,7 @@ export function App() {
                 : storageStatus.persisted ? "persistent" : "best effort"}
             />
             <Metric label="screen wake lock" value={wakeLockState} />
-            <Metric label="autofocus photos" value={photoCaptureSupported ? "available" : "unavailable"} />
+            <Metric label="autofocus photos (Beta)" value={photoCaptureSupported ? "available" : "unavailable"} />
           </dl>
           {storageWarning(store.kind, storageStatus)}
         </section>
@@ -387,7 +387,7 @@ export function App() {
                 disabled={Boolean(busy) || store.kind !== "opfs" || !photoCaptureSupported}
                 onClick={() => void run("opening autofocus camera", openPhotoCamera)}
               >
-                Open close-focus photos
+                Open close-focus photos (Beta)
               </button>
             </>
           ) : null}
@@ -755,7 +755,7 @@ function PhotoCapturePanel({
   const capturing = snapshot.phase === "capturing";
   return (
     <section className="capture-panel photo-capture-panel" aria-label="Autofocus photo controls">
-      <p className="local-data-status">LOCAL DEVICE ONLY · VISUAL GUIDE ONLY · UNPOSED PHOTOS · DOWNSTREAM SFM REQUIRED</p>
+      <p className="local-data-status">BETA · LOCAL DEVICE ONLY · VISUAL GUIDE ONLY · UNPOSED PHOTOS · DOWNSTREAM SFM REQUIRED</p>
       <p className="build-id">
         Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
       </p>
@@ -1011,7 +1011,7 @@ function captureInstruction(snapshot: DiagnosticSnapshot) {
   if (!snapshot.running) {
     return snapshot.lastReadiness
       ? `${readinessLabel(snapshot.lastReadiness.status)} — ${snapshot.lastReadiness.primaryAction}`
-      : "Choose guided WebXR for medium objects or autofocus photos for close subjects.";
+      : "Choose guided WebXR for medium objects or autofocus photos (Beta) for close subjects.";
   }
   if (!snapshot.captureId) {
     if (snapshot.lastReadiness) {
