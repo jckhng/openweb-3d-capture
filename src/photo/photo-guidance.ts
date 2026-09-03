@@ -59,7 +59,7 @@ export function buildPhotoCoverageCells(photoCount: number): CaptureCoverageCell
   });
 }
 
-export function buildTrackedPhotoCoverageCells(
+export function buildGuidedPhotoCoverageCells(
   samples: readonly PhotoCoverageSample[],
 ): CaptureCoverageCell[] {
   return CHECKPOINTS.map((checkpoint) => {
@@ -81,13 +81,12 @@ export function buildTrackedPhotoCoverageCells(
   });
 }
 
-export function trackedPhotoPrompt(
+export function guidedPhotoPrompt(
   guidance: PhotoCaptureGuidance | undefined,
   cells: readonly CaptureCoverageCell[],
 ): string {
-  if (!guidance) return "XR GUIDE UNAVAILABLE — keep this screen open or save the partial set.";
-  if (guidance.trackingState !== "tracked") return "WAIT FOR XR TRACKING — move the phone slowly across textured surroundings.";
-  if (!guidance.centered) return "RE-CENTER OBJECT — keep it inside the reticle.";
+  if (!guidance) return "INITIALIZING VISUAL GUIDE — keep the object centered.";
+  if (guidance.trackingState === "weak") return "VISUAL LOCK WEAK — move less and keep more of the previous view.";
   const cell = cells.find((candidate) => (
     candidate.latitude === guidance.latitude && candidate.azimuthBin === guidance.azimuthBin
   ));

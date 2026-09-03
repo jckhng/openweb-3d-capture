@@ -14,19 +14,21 @@ import {
   measurePhotoOverlap,
   photoCapturePrompt,
   buildPhotoCoverageCells,
-  buildTrackedPhotoCoverageCells,
+  buildGuidedPhotoCoverageCells,
+  guidedPhotoPrompt,
   PHOTO_TARGET,
-  trackedPhotoPrompt,
   type PhotoCoverageSample,
   type PhotoFeatureSignature,
   type PhotoOverlapMetrics,
 } from "./photo-guidance";
+import { PhotoVisualNavigator } from "./photo-visual-navigation";
 
 const BURST_SIZE = 3;
 const PREVIEW_SAMPLE_COUNT = 7;
 const PREVIEW_SAMPLE_INTERVAL_MS = 120;
 const MAXIMUM_PREVIEW_MOTION = 0.065;
 const MINIMUM_PHOTO_SHARPNESS = 0.32;
+const NAVIGATION_SAMPLE_INTERVAL = 2;
 
 type PhotoPhase = "closed" | "preview" | "capturing" | "complete";
 export type PhotoCaptureStage =
@@ -60,8 +62,9 @@ export interface PhotoCaptureSnapshot {
   stageProgress: number;
   burstFrame: number;
   automaticCapture: boolean;
-  guidanceMode: "manual" | "webxr";
+  guidanceMode: "manual" | "visual-navigation";
   guidance?: PhotoCaptureGuidance;
+  navigationOrientationAvailable: boolean;
   coverageCells: CaptureCoverageCell[];
   cameraStreamState: "closed" | "live" | "muted" | "ended";
   lastPhotoPreviewUrl?: string;
@@ -91,6 +94,7 @@ interface ExtendedConstraintSet extends MediaTrackConstraintSet {
 interface PreviewSample {
   quality: ImageQualityAnalysis;
   luminance: Uint8Array;
+  gray: { width: number; height: number; data: Uint8Array };
 }
 
 interface ScoredPhoto {
@@ -115,7 +119,9 @@ export class PhotoCaptureController {
   private recentSharpness: number[] = [];
   private readonly signatures: Array<{ photoId: number; signature: PhotoFeatureSignature }> = [];
   private readonly guidanceSamples: PhotoCoverageSample[] = [];
+  private readonly visualNavigator = new PhotoVisualNavigator();
   private currentGuidance?: PhotoCaptureGuidance;
+  private navigationTick = 0;
   private previewTimer?: number;
   private previousPreview?: PreviewSample;
   private movementObserved = true;
@@ -132,6 +138,7 @@ export class PhotoCaptureController {
     burstFrame: 0,
     automaticCapture: false,
     guidanceMode: "manual",
+    navigationOrientationAvailable: false,
     coverageCells: buildPhotoCoverageCells(0),
     cameraStreamState: "closed",
     instruction: "Open the autofocus camera for a close-focus photo scan.",
@@ -202,11 +209,12 @@ export class PhotoCaptureController {
     }
   }
 
-  async startCapture(guidanceMode: "manual" | "webxr" = "manual"): Promise<void> {
+  async startCapture(): Promise<void> {
     if (!this.stream || !this.track || !this.imageCapture) {
       throw new Error("Open the autofocus camera first");
     }
     if (this.activeMetadata) throw new Error("A photo scan is already active");
+    await requestDeviceOrientationPermission();
     const now = new Date().toISOString();
     const metadata: CaptureMetadata = {
       format: "open3dcapture",
@@ -226,7 +234,7 @@ export class PhotoCaptureController {
         poseAuthority: "downstream-sfm",
         imagesAreUnposed: true,
         minimumRecommendedImages: PHOTO_TARGET,
-        guidanceSource: guidanceMode,
+        guidanceSource: "visual-navigation",
         guidanceOnly: true,
       },
     };
@@ -236,6 +244,10 @@ export class PhotoCaptureController {
     this.recentSharpness = [];
     this.signatures.length = 0;
     this.guidanceSamples.length = 0;
+    this.visualNavigator.reset();
+    this.navigationTick = 0;
+    this.currentGuidance = undefined;
+    window.addEventListener("deviceorientation", this.handleDeviceOrientation);
     this.previousPreview = undefined;
     this.movementObserved = true;
     this.automaticCaptureEligibleAt = Date.now() + 600;
@@ -245,8 +257,9 @@ export class PhotoCaptureController {
     this.snapshot.lastQuality = undefined;
     this.snapshot.liveQuality = undefined;
     this.snapshot.lastOverlap = undefined;
-    this.snapshot.guidanceMode = guidanceMode;
-    this.snapshot.guidance = guidanceMode === "webxr" ? this.currentGuidance : undefined;
+    this.snapshot.guidanceMode = "visual-navigation";
+    this.snapshot.guidance = undefined;
+    this.snapshot.navigationOrientationAvailable = false;
     this.snapshot.coverageCells = buildPhotoCoverageCells(0);
     this.snapshot.stage = "move";
     this.snapshot.stageProgress = 0;
@@ -263,14 +276,6 @@ export class PhotoCaptureController {
     this.emit();
   }
 
-  setWebXRGuidance(guidance: PhotoCaptureGuidance | undefined): void {
-    this.currentGuidance = guidance ? { ...guidance } : undefined;
-    if (this.snapshot.guidanceMode !== "webxr") return;
-    const previous = this.snapshot.guidance;
-    this.snapshot.guidance = guidance ? { ...guidance } : undefined;
-    if (!sameGuidance(previous, guidance)) this.emit();
-  }
-
   async capturePhoto(): Promise<void> {
     const metadata = this.activeMetadata;
     const imageCapture = this.imageCapture;
@@ -280,8 +285,8 @@ export class PhotoCaptureController {
       throw new Error("Start a photo scan first");
     }
     if (this.snapshot.phase === "capturing") return;
-    const captureGuidance = this.snapshot.guidanceMode === "webxr"
-      ? this.currentGuidance ? { ...this.currentGuidance } : undefined
+    const captureGuidance = this.snapshot.guidanceMode === "visual-navigation" && this.currentGuidance
+      ? { ...this.currentGuidance }
       : undefined;
     const guidanceIssue = this.guidanceIssue(captureGuidance);
     if (guidanceIssue) {
@@ -413,6 +418,7 @@ export class PhotoCaptureController {
       this.snapshot.instruction = "SAVING LOCALLY — keep this screen open.";
       this.emit();
       await this.persistence.appendUnposedPhoto(metadata.captureId, photo, selected.blob);
+      this.visualNavigator.acceptCurrent();
       this.signatures.push({ photoId: id, signature: selectedSignature });
       this.recentSharpness.push(selected.quality.sharpnessScore);
       if (this.recentSharpness.length > 24) this.recentSharpness.shift();
@@ -423,7 +429,7 @@ export class PhotoCaptureController {
           azimuthBin: captureGuidance.azimuthBin,
           latitude: captureGuidance.latitude,
         });
-        this.snapshot.coverageCells = buildTrackedPhotoCoverageCells(this.guidanceSamples);
+        this.snapshot.coverageCells = buildGuidedPhotoCoverageCells(this.guidanceSamples);
       } else {
         this.snapshot.coverageCells = buildPhotoCoverageCells(this.snapshot.photoCount);
       }
@@ -459,6 +465,7 @@ export class PhotoCaptureController {
     metadata.status = "complete";
     await this.persistence.finalizeCapture(metadata.captureId, metadata);
     this.stopPreviewMonitor();
+    this.stopVisualNavigation();
     this.activeMetadata = undefined;
     this.snapshot.captureId = undefined;
     this.snapshot.lastCaptureId = metadata.captureId;
@@ -485,6 +492,7 @@ export class PhotoCaptureController {
 
   async close(): Promise<void> {
     this.stopPreviewMonitor();
+    this.stopVisualNavigation();
     if (this.activeMetadata) {
       const metadata = this.activeMetadata;
       metadata.frameCount = this.snapshot.photoCount;
@@ -633,6 +641,18 @@ export class PhotoCaptureController {
     if (!video || !this.activeMetadata || this.snapshot.phase !== "preview") return;
     try {
       const sample = samplePreview(video, this.qualityCanvas);
+      this.navigationTick += 1;
+      if (this.navigationTick % NAVIGATION_SAMPLE_INTERVAL === 0 || !this.currentGuidance) {
+        const navigation = this.visualNavigator.observe(sample.gray);
+        this.currentGuidance = navigation.guidance;
+        this.snapshot.guidance = navigation.guidance;
+        this.snapshot.navigationOrientationAvailable = navigation.orientationAvailable;
+      } else {
+        const navigation = this.visualNavigator.getSnapshot();
+        this.currentGuidance = navigation.guidance;
+        this.snapshot.guidance = navigation.guidance;
+        this.snapshot.navigationOrientationAvailable = navigation.orientationAvailable;
+      }
       const hadPrevious = Boolean(this.previousPreview);
       const motion = this.previousPreview
         ? luminanceDifference(this.previousPreview.luminance, sample.luminance)
@@ -704,18 +724,34 @@ export class PhotoCaptureController {
   }
 
   private capturePrompt(): string {
-    return this.snapshot.guidanceMode === "webxr"
-      ? trackedPhotoPrompt(this.currentGuidance, this.snapshot.coverageCells)
+    return this.snapshot.guidanceMode === "visual-navigation"
+      ? guidedPhotoPrompt(this.currentGuidance, this.snapshot.coverageCells)
       : photoCapturePrompt(this.snapshot.photoCount);
   }
 
   private guidanceIssue(guidance = this.currentGuidance): string | undefined {
-    if (this.snapshot.guidanceMode !== "webxr") return undefined;
-    const prompt = trackedPhotoPrompt(guidance, this.snapshot.coverageCells);
+    if (this.snapshot.guidanceMode !== "visual-navigation") return undefined;
+    const prompt = guidedPhotoPrompt(guidance, this.snapshot.coverageCells);
+    if (this.snapshot.photoCount === 0 && guidance?.trackingState === "initializing") return undefined;
     return prompt.startsWith("BLUE SECTOR READY") || prompt.startsWith("VIEW 1 / 2 SAVED")
       ? undefined
       : prompt;
   }
+
+  private stopVisualNavigation(): void {
+    window.removeEventListener("deviceorientation", this.handleDeviceOrientation);
+    this.visualNavigator.reset();
+    this.currentGuidance = undefined;
+  }
+
+  private readonly handleDeviceOrientation = (event: DeviceOrientationEvent): void => {
+    this.visualNavigator.updateOrientation(
+      event.alpha,
+      event.beta,
+      event.gamma,
+      screen.orientation?.angle ?? window.orientation ?? 0,
+    );
+  };
 
   private readonly handleTrackMute = (): void => {
     this.snapshot.cameraStreamState = "muted";
@@ -740,15 +776,17 @@ export class PhotoCaptureController {
   }
 }
 
-function sameGuidance(
-  left: PhotoCaptureGuidance | undefined,
-  right: PhotoCaptureGuidance | undefined,
-): boolean {
-  if (!left || !right) return left === right;
-  return left.azimuthBin === right.azimuthBin &&
-    left.latitude === right.latitude &&
-    left.centered === right.centered &&
-    left.trackingState === right.trackingState;
+async function requestDeviceOrientationPermission(): Promise<void> {
+  if (!("DeviceOrientationEvent" in window)) return;
+  const orientation = window.DeviceOrientationEvent as typeof DeviceOrientationEvent & {
+    requestPermission?: () => Promise<"granted" | "denied">;
+  };
+  if (!orientation.requestPermission) return;
+  try {
+    await orientation.requestPermission();
+  } catch {
+    // Preview-only tracking remains available when sensor permission is denied.
+  }
 }
 
 function samplePreview(video: HTMLVideoElement, canvas: HTMLCanvasElement): PreviewSample {
@@ -779,7 +817,11 @@ function samplePreview(video: HTMLVideoElement, canvas: HTMLCanvasElement): Prev
   for (let source = 0, target = 0; source < pixels.length; source += 4, target += 1) {
     luminance[target] = Math.round(0.2126 * pixels[source] + 0.7152 * pixels[source + 1] + 0.0722 * pixels[source + 2]);
   }
-  return { quality: analyzeTargetImageQuality(pixels, width, height), luminance };
+  return {
+    quality: analyzeTargetImageQuality(pixels, width, height),
+    luminance,
+    gray: { width, height, data: luminance },
+  };
 }
 
 async function scorePhoto(blob: Blob, canvas: HTMLCanvasElement): Promise<ScoredPhoto> {

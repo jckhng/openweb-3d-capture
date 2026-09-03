@@ -2,7 +2,7 @@
 
 ## 0. Implementation status — 3 September 2026
 
-Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression and deferred repair are validated on the target phone. Pairwise SE(3) correction is rejected. A bounded multi-view landmark prototype improves one reference capture and regresses another despite passing its internal score. On-phone pose refinement is therefore removed from the production critical path. M3 capture preflight, coverage guidance, and destination-specific Spirula/LichtFeld handoff are now the active product milestones.
+Milestones 0 and 1 are accepted on the target phone. Milestone 2 deterministic quality selection is implemented and has produced multiple hardware captures. Incremental phone-worker visual tracking, bounded shared calibration, scale-aware recovery matching, and verified loop-closure discovery are implemented. The capture backpressure regression and deferred repair are validated on the target phone. Pairwise SE(3) correction is rejected. A bounded multi-view landmark prototype improves one reference capture and regresses another despite passing its internal score. On-phone pose refinement is therefore removed from the production critical path. The WebXR-plus-autofocus hybrid is also rejected after it failed to restore XR tracking on the target phone. Close-focus mode now has a preview visual-navigation prototype that retains autofocus while driving coarse coverage guidance. M3 capture preflight, coverage guidance, and destination-specific Spirula/LichtFeld handoff are the active product milestones.
 
 Production decision:
 
@@ -101,23 +101,23 @@ Implemented:
 * preview-motion settling followed by an up-to-three-photo full-resolution burst; only the sharpest acceptable center-target image is retained
 * immediate OPFS persistence with focus, exposure, sharpness, texture, burst-selection, and explicit unposed metadata
 * separate `photo-sfm` capture schema and Spirula/LichtFeld exports that contain no fabricated or stale WebXR transforms
-* count-guided 50-view, 25-checkpoint level/raised/top/low globe workflow; its coverage is explicitly not pose-measured
+* 50-view, 25-checkpoint level/raised/top/low autofocus globe workflow driven by a coarse preview visual-navigation estimate; its coverage is explicitly not reconstruction-pose measured
 * autofocus move → ready → focus → settle → burst → select → overlap → save state machine with reticle progress, haptic accept/reject feedback, and last-winner preview
 * optional automatic autofocus capture after detected movement followed by a stable, sharp, textured preview
 * local BRIEF feature matching against accepted photographs to reject near-duplicate views and weak-overlap jumps without fabricating camera poses
-* scripted autofocus-only globe progress map that advances from accepted-image count and does not pretend to track physical camera motion
-* experimental XR-assisted autofocus capability probe that starts WebXR before `getUserMedia()`, verifies both remain live, and reopens autofocus-only mode when concurrent camera ownership fails
-* XR target lock and object-relative autofocus globe guidance with actual accepted-photo counts per required sector
-* close-object target locking from XR centre depth with an explicit 20/30/45/60 cm fallback when depth is unavailable, avoiding the one-metre WebXR default used for medium objects
-* coarse per-photo XR guidance labels explicitly marked `poseSynchronized: false`; WebXR matrices are never attached to autofocus photographs
-* live XR frame-rate, tracking, autofocus-stream, and focus-mode diagnostics included in the capture HUD and copyable tester report
+* low-resolution autofocus-preview BRIEF tracking against successive previews and the last accepted anchor, with descriptor-continuity fallback for stationary views where eight-point geometry is degenerate
+* relative device-orientation integration for coarse longitude/elevation when available, plus preview-flow longitude fallback when it is unavailable
+* visually guided autofocus sector counts based on the estimated current cell rather than accepted-image order
+* coarse per-photo visual-navigation labels explicitly marked `poseSynchronized: false`; camera matrices are never fabricated for autofocus photographs
+* live preview-match, confidence, orientation-availability, autofocus-stream, and focus-mode diagnostics
+* removed XR-assisted autofocus after target-phone testing showed the autofocus stream could remain live while XR never reacquired tracking
 * landscape capture HUDs moved into a narrow right-side rail so WebXR and autofocus controls do not obscure the central subject
 
 Local verification:
 
 ```text
 npm run build   PASS
-npm test        PASS (94 tests)
+npm test        PASS (95 tests)
 npm audit       PASS (0 known vulnerabilities)
 ```
 
@@ -818,21 +818,23 @@ Properties:
 * requests supported continuous or single-shot autofocus and center metering
 * waits for a stable preview, captures up to three full-resolution photographs, and keeps the sharpest acceptable result
 * records available focus/exposure settings and rejects motion, low-detail, and soft results
-* uses the same 25-checkpoint translucent globe as a scripted navigation sequence because no pose is available to measure coverage; it advances only from accepted-image count
+* uses the same 25-checkpoint translucent globe with coarse longitude/elevation from relative device orientation when available and preview feature flow as a weaker fallback
 * separates movement from acquisition with live move/hold/focus/burst/select/check/save feedback, optional automatic capture, haptics, and retained-winner confirmation
 * rejects visually near-duplicate photographs and low-overlap jumps using local feature matching and normalized feature displacement; this is an image heuristic, not pose recovery or proof of geometric coverage
+* compares low-resolution preview features with the last accepted anchor to detect lost visual continuity; strong descriptor continuity retains lock while stationary even when epipolar estimation is degenerate
+* stores only coarse guidance cells marked unsynchronized; downstream SfM remains the sole pose authority
 
 This is preferable to attaching stale or guessed WebXR transforms to autofocus images.
 
-Status: implemented in the web application and covered by 90 automated tests. Target-phone autofocus behavior, automatic-capture timing, feature-overlap threshold calibration, memory pressure, true still resolution, minimum usable distance, 50-view capture ergonomics, and downstream Spirula/LichtFeld reconstruction remain unvalidated.
+Status: implemented in the web application and covered by 95 automated tests. Target-phone preview-navigation direction/sign, orientation availability, visual-lock thresholds, autofocus behavior, automatic-capture timing, memory pressure, true still resolution, minimum usable distance, 50-view capture ergonomics, and downstream Spirula/LichtFeld reconstruction remain unvalidated.
 
-### WebXR plus browser autofocus hybrid — experimental only
+### WebXR plus browser autofocus hybrid — rejected on the target phone
 
 Concurrent or interleaved WebXR and `getUserMedia()` capture has unresolved camera ownership, frame-time alignment, lens-state, intrinsics, and relocalization risks. A two-pass variant may use WebXR to survey an orbit and then capture autofocus photographs, but the photographs still require visual registration.
 
-Status: a capability-gated XR-assisted autofocus probe is implemented. It requests WebXR first, opens the ordinary autofocus stream, verifies both remain live, exposes both statuses in the HUD, and falls back to autofocus-only mode on immediate failure. When it survives, XR drives object-relative coverage and centering guidance only. Accepted photographs remain unposed and retain only a coarse sector/elevation label marked unsynchronized.
+Status: rejected and removed from the product. The target-phone probe opened both paths and left the autofocus stream live, but WebXR never produced a tracked pose after ordinary camera capture started. Session and stream liveness were therefore insufficient compatibility checks. Retaining this mode would expose a permanently blocked **WAIT FOR XR TO TRACK** state without a reliable browser recovery mechanism.
 
-Do not make this hybrid the product foundation without target-phone evidence that XR tracking, actual autofocus behavior, still capture, close-range sharpness, and camera identity remain stable for a complete orbit.
+Do not restore this hybrid without target-phone evidence that XR tracking, actual autofocus behavior, still capture, close-range sharpness, and camera identity remain stable for a complete orbit. The current web path instead derives navigation-grade guidance from the autofocus preview and optional device orientation, while keeping photographs explicitly unposed.
 
 ### Native precision mode — post-v1 candidate
 

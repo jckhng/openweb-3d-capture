@@ -79,10 +79,6 @@ summary { color: #94a3b8; cursor: pointer; }
 .photo-preview { display: none; }
 .photo-reticle { display: none; }
 .photo-mode-note { color: #cbd5e1; font-size: 0.76rem; line-height: 1.4; }
-.hybrid-distance { display: flex; align-items: center; gap: 0.45rem; margin: 0 0 0.55rem; color: #bae6fd; font-size: 0.72rem; }
-.hybrid-distance select { padding: 0.35rem; border: 1px solid #475569; border-radius: 0.4rem; color: #e5e7eb; background: #0f172a; }
-.hybrid-distance small { color: #94a3b8; }
-.hybrid-depth { margin: 0 0 0.55rem; color: #bae6fd; font-size: 0.72rem; }
 
 .capture-globe {
   width: min(18rem, 80vw);

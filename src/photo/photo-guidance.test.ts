@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPhotoCoverageCells,
-  buildTrackedPhotoCoverageCells,
+  buildGuidedPhotoCoverageCells,
   classifyPhotoOverlap,
   currentPhotoCheckpoint,
   PHOTO_TARGET,
-  trackedPhotoPrompt,
+  guidedPhotoPrompt,
 } from "./photo-guidance";
 
 describe("autofocus photo guidance", () => {
@@ -41,8 +41,8 @@ describe("autofocus photo guidance", () => {
       .toBe("useful");
   });
 
-  it("fills XR-guided cells by measured sector rather than capture order", () => {
-    const cells = buildTrackedPhotoCoverageCells([
+  it("fills visually guided cells by measured sector rather than capture order", () => {
+    const cells = buildGuidedPhotoCoverageCells([
       { photoId: 0, latitude: "raised", azimuthBin: 4 },
       { photoId: 1, latitude: "raised", azimuthBin: 4 },
       { photoId: 2, latitude: "level", azimuthBin: 9 },
@@ -54,16 +54,19 @@ describe("autofocus photo guidance", () => {
     expect(cells[0].state).toBe("empty");
   });
 
-  it("blocks capture outside a required XR-guided checkpoint", () => {
-    const cells = buildTrackedPhotoCoverageCells([]);
-    expect(trackedPhotoPrompt({
-      source: "webxr",
+  it("blocks capture outside a required visually guided checkpoint", () => {
+    const cells = buildGuidedPhotoCoverageCells([]);
+    expect(guidedPhotoPrompt({
+      source: "visual-navigation",
       poseSynchronized: false,
+      longitude: -135,
       azimuthBin: 1,
       latitude: "raised",
       elevation: 45,
-      centered: true,
-      trackingState: "tracked",
+      trackingState: "tracking",
+      matches: 42,
+      inlierRatio: 0.7,
+      confidence: 0.7,
     }, cells)).toContain("between required sectors");
   });
 });

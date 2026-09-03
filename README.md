@@ -1,11 +1,11 @@
 # Open Web 3D Capture
 
-Open Web 3D Capture is an experimental, local-first Android capture app for Gaussian splatting and photogrammetry. It provides a pose-guided WebXR mode for medium objects, an autofocus photo mode for small subjects, and a device-dependent XR-assisted autofocus probe, then packages the images for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
+Open Web 3D Capture is an experimental, local-first Android capture app for Gaussian splatting and photogrammetry. It provides a pose-guided WebXR mode for medium objects and an autofocus photo mode for small subjects, then packages the images for visual registration in [Spirula Studio](https://github.com/harry7557558/spirula-studio) or [LichtFeld Studio](https://github.com/MrNeRF/LichtFeld-Studio).
 
 The app is a capture and preflight tool. It does not reconstruct a Gaussian splat or produce final training poses on the phone. WebXR poses drive guidance in WebXR mode and remain available as provenance. Autofocus-mode photos are explicitly unposed. Downstream structure from motion (SfM) remains the final pose authority in both modes.
 
 > [!IMPORTANT]
-> All capture modes require persistent Origin Private File System storage. Guided WebXR additionally requires Android Chrome on an ARCore-capable phone and granted WebXR Raw Camera Access. Close-focus mode requires browser `ImageCapture` support and exports unposed photographs that must pass through SfM. XR-assisted autofocus is an experimental compatibility probe: browsers do not guarantee that WebXR and an autofocus media stream can own the camera concurrently.
+> All capture modes require persistent Origin Private File System storage. Guided WebXR additionally requires Android Chrome on an ARCore-capable phone and granted WebXR Raw Camera Access. Close-focus mode requires browser `ImageCapture` support and exports unposed photographs that must pass through SfM.
 
 ## What it does
 
@@ -18,7 +18,7 @@ The app is a capture and preflight tool. It does not reconstruct a Gaussian spla
 - Exports bounded photo packages for Spirula and LichtFeld, plus a full diagnostic archive.
 - Provides a separate close-focus mode with the same 25-checkpoint globe, live move/hold/focus/burst/save feedback, optional automatic capture, a saved-image confirmation, and image-feature checks for overlap and viewpoint change.
 - Requests supported autofocus controls, checks preview stability, takes up to three full-resolution photographs, and retains only the sharpest acceptable image.
-- Probes concurrent WebXR and autofocus access, uses XR only for live object-relative globe guidance when both paths survive, and automatically reopens autofocus-only mode when the probe fails.
+- Tracks low-resolution autofocus-preview features for visual continuity and uses relative device orientation, when available, to move the coarse coverage globe.
 
 The recorder evaluates at most four candidates per second. After movement, it requires a three-candidate stable window before accepting another reconstruction image. A complete required checkpoint set contains 50–100 selected images. Incomplete exports can contain a different number, and sparse captures fall back to all accepted images.
 
@@ -38,7 +38,7 @@ The static hosting provider still receives ordinary requests for application fil
 
 The 45 cm limit is provisional guidance, not a universal optical specification. ARCore currently defaults to fixed focus on supported cameras, while WebXR Raw Camera Access provides no autofocus, lens-selection, or manual-focus control. Automatic close-range rejection works only when the device supplies usable CPU depth. Without CPU depth, the app cannot measure closeness and places the initial subject estimate 1 m in front of the camera; globe guidance is consequently approximate.
 
-For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, or measured coverage. Its globe is a manual navigation sequence. Local feature matching rejects views that appear too similar or have too little overlap, but it does not recover a pose or prove geometric coverage.
+For small or close subjects, use **Open close-focus photos**. This ordinary-camera path can autofocus but has no synchronized WebXR pose, depth, or reconstruction-grade measured coverage. Low-resolution preview features maintain navigation continuity, while relative device orientation stabilizes coarse longitude and elevation when the browser supplies it. Local feature matching rejects views that appear too similar or have too little overlap. None of these signals recovers an exportable camera pose or proves geometric coverage.
 
 ## Capture workflow
 
@@ -58,20 +58,16 @@ Uncaptured cells are light blue, the active cell is blue, and completed cells ar
 ### Close-focus autofocus photos
 
 1. Select **Open close-focus photos**, center a textured part of the subject in the circular reticle, then select **Start photo scan**.
-2. Follow the blue active cell around the translucent globe. Each of its 25 checkpoints needs two accepted photographs. This autofocus-only globe is a scripted progress map that advances after saved photographs; it does not track the camera.
+2. Follow the blue active cell around the translucent globe. Each of its 25 checkpoints needs two accepted photographs. The globe follows a coarse preview visual-navigation estimate instead of advancing by photograph count.
 3. Move between viewpoints, keep the subject inside the reticle, and stop. Select **Arm this viewpoint**, or enable **Auto capture** after starting the scan. The app waits for sufficient detail, sharpness, and stability before taking a burst.
 4. The app retains the sharpest burst image, checks its visual overlap and displacement against accepted photographs, shows the saved winner, and asks for a wider or smaller step when the view is unsuitable.
 5. Capture at least 50 accepted views, finish the set, then export to Spirula or LichtFeld and run SfM before training.
 
-### Experimental XR-assisted autofocus
+### Autofocus preview navigation
 
-1. Select **Try XR-assisted autofocus**. The app starts WebXR, opens the autofocus stream, then verifies that both remain live.
-2. If the probe fails, WebXR is closed and ordinary autofocus-only mode is reopened. The displayed failure is the expected compatibility result for that device/browser combination.
-3. If the probe passes, center the subject and select **Start photo scan**. This locks an XR target for guidance. XR centre depth is used when available; otherwise select the closest 20/30/45/60 cm camera-to-object-centre estimate first.
-4. Move to blue globe cells. Accepted photographs fill the measured XR sector instead of a scripted capture-order sector.
-5. Confirm that the HUD continues to report nonzero XR frame rate, `tracked`, autofocus stream `live`, and a supported autofocus mode.
+The app extracts and matches BRIEF features from the center of the autofocus preview. Matches against the last accepted view gate continuity; matches between successive previews provide a weak longitude fallback. Relative device orientation supplies the more stable coarse globe direction when available. The first accepted view establishes the local starting direction.
 
-WebXR drives only the globe and centering warning. Each photograph remains explicitly unposed and stores only a coarse guidance cell with `poseSynchronized: false`. Downstream SfM remains mandatory.
+This navigation estimate is deliberately not serialized as a camera matrix. Each photograph stores only a coarse guidance cell with `poseSynchronized: false`, and downstream SfM remains mandatory. If the HUD reports **VISUAL LOCK WEAK**, move back toward the preceding viewpoint until feature overlap recovers.
 
 See [wider rollout testing](docs/wider-testing.md) for the detailed test protocol and failure recovery.
 
@@ -118,7 +114,7 @@ Implementation status, validation evidence, rejected experiments, and future wor
 ## Current limitations
 
 - WebXR Raw Camera Access is an experimental optional API. A non-null `view.camera` during the live XR session is the decisive signal.
-- Autofocus `getUserMedia()`/`ImageCapture` photographs are not pose-synchronized; their orbit prompts are not measured and their exports require downstream SfM.
+- Autofocus `getUserMedia()`/`ImageCapture` photographs are not pose-synchronized. Their preview-derived orbit guidance is coarse and their exports require downstream SfM.
 - Browser camera capability reporting and autofocus behavior vary by device. The close-focus burst and thresholds require target-phone calibration.
 - Only CPU-accessible WebXR depth is recorded. GPU-only depth does not produce depth files, the constellation, distance enforcement, or a seed point cloud.
 - Fixed-focus WebXR can irreversibly blur small or close subjects.

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_QUALITY_SELECTOR_CONFIG } from "../keyframes/quality-selector";
-import { locateCoverageCell } from "../coverage/readiness";
 import type { DiagnosticSnapshot } from "../xr/diagnostic-controller";
 import { XRDiagnosticController } from "../xr/diagnostic-controller";
 import { probeCapabilities } from "../xr/capabilities";
@@ -9,7 +8,6 @@ import type {
   CaptureMetadata,
   CaptureReadinessStatus,
   Matrix4,
-  PhotoCaptureGuidance,
 } from "../shared/types";
 import { MemoryCaptureStore } from "../storage/memory";
 import { OPFSCaptureStore } from "../storage/opfs";
@@ -51,8 +49,6 @@ export function App() {
   const [notice, setNotice] = useState<string>();
   const [storageStatus, setStorageStatus] = useState<BrowserStorageStatus>({});
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [hybridMode, setHybridMode] = useState(false);
-  const [hybridFallbackDistance, setHybridFallbackDistance] = useState(0.3);
   const previousCheckpointCount = useRef(0);
   const previousOffTarget = useRef(false);
   const photoVideo = useRef<HTMLVideoElement>(null);
@@ -74,17 +70,6 @@ export function App() {
 
   useEffect(() => controller.subscribe(setSnapshot), [controller]);
   useEffect(() => photoController.subscribe(setPhotoSnapshot), [photoController]);
-
-  useEffect(() => {
-    photoController.setWebXRGuidance(hybridMode ? makePhotoGuidance(snapshot) : undefined);
-  }, [
-    hybridMode,
-    photoController,
-    snapshot.guidanceFraming,
-    snapshot.guidanceTarget,
-    snapshot.pose,
-    snapshot.trackingState,
-  ]);
 
   useEffect(() => {
     void run("capability probe", async () => {
@@ -187,11 +172,7 @@ export function App() {
 
   async function startPhotoCapture() {
     await ensureCaptureStorage();
-    if (hybridMode) {
-      controller.lockGuidanceTarget(hybridFallbackDistance);
-      photoController.setWebXRGuidance(makePhotoGuidance(controller.getSnapshot()));
-    }
-    await photoController.startCapture(hybridMode ? "webxr" : "manual");
+    await photoController.startCapture();
   }
 
   async function ensureCaptureStorage() {
@@ -213,41 +194,13 @@ export function App() {
     await photoController.open(photoVideo.current);
   }
 
-  async function openHybridCamera() {
-    if (!photoVideo.current) throw new Error("Camera preview is unavailable");
-    await controller.start();
-    try {
-      await photoController.open(photoVideo.current);
-      await delay(500);
-      const xrState = controller.getSnapshot();
-      const cameraState = photoController.getSnapshot();
-      if (!xrState.running) throw new Error("WebXR ended when the autofocus stream opened");
-      if (cameraState.cameraStreamState !== "live") {
-        throw new Error(`Autofocus stream became ${cameraState.cameraStreamState} while WebXR was active`);
-      }
-      setHybridMode(true);
-    } catch (caught) {
-      await controller.stop();
-      if (photoController.getSnapshot().cameraStreamState !== "live") {
-        await photoController.close();
-        await photoController.open(photoVideo.current);
-      }
-      setHybridMode(false);
-      setError(`XR and autofocus could not run together. Autofocus-only fallback opened: ${errorMessage(caught)}`);
-    }
-  }
-
   async function finishPhotoCapture() {
     await photoController.finishCapture();
-    if (hybridMode) await controller.stop();
-    setHybridMode(false);
     await refreshCaptures();
   }
 
   async function closePhotoCamera() {
     await photoController.close();
-    if (hybridMode) await controller.stop();
-    setHybridMode(false);
     await refreshCaptures();
   }
 
@@ -272,11 +225,7 @@ export function App() {
   }
 
   return (
-    <main className={[
-      snapshot.running ? "xr-active" : "",
-      photoActive ? "photo-active" : "",
-      snapshot.running && photoActive ? "hybrid-active" : "",
-    ].filter(Boolean).join(" ") || undefined}>
+    <main className={snapshot.running ? "xr-active" : photoActive ? "photo-active" : undefined}>
       <header>
         <p className="eyebrow">Capture preflight</p>
         <h1>Open Web 3D Capture</h1>
@@ -340,10 +289,8 @@ export function App() {
         <PhotoCaptureGlobe
           photoCount={photoSnapshot.photoCount}
           overlap={photoSnapshot.lastOverlap}
-          trackedCells={photoSnapshot.guidanceMode === "webxr" ? photoSnapshot.coverageCells : undefined}
+          guidedCells={photoSnapshot.guidanceMode === "visual-navigation" ? photoSnapshot.coverageCells : undefined}
           guidance={photoSnapshot.guidance}
-          guidancePose={hybridMode ? snapshot.pose : undefined}
-          guidanceTarget={hybridMode ? snapshot.guidanceTarget?.worldPoint : undefined}
         />
       ) : null}
 
@@ -375,12 +322,6 @@ export function App() {
         </div>
       ) : null}
 
-      {hybridMode && photoSnapshot.captureId && snapshot.guidanceFraming && !snapshot.guidanceFraming.centered ? (
-        <div className="target-warning" role="status">
-          {targetDirection(snapshot.guidanceFraming.ndc)} — RE-CENTER OBJECT
-        </div>
-      ) : null}
-
       {snapshot.captureId && snapshot.captureReadiness ? (
         <CaptureGlobe
           report={snapshot.captureReadiness}
@@ -398,10 +339,6 @@ export function App() {
           onStart={() => void run("starting autofocus photo scan", startPhotoCapture)}
           onCapture={() => void run("capturing sharp photo burst", () => photoController.capturePhoto())}
           onAutomaticChange={(enabled) => photoController.setAutomaticCapture(enabled)}
-          hybrid={hybridMode}
-          hybridFallbackDistance={hybridFallbackDistance}
-          onHybridFallbackDistanceChange={setHybridFallbackDistance}
-          xrSnapshot={snapshot}
           onFinish={() => void run("saving autofocus photo scan", finishPhotoCapture)}
           onClose={() => void run("closing autofocus camera", closePhotoCamera)}
         />
@@ -451,12 +388,6 @@ export function App() {
                 onClick={() => void run("opening autofocus camera", openPhotoCamera)}
               >
                 Open close-focus photos
-              </button>
-              <button
-                disabled={Boolean(busy) || store.kind !== "opfs" || !photoCaptureSupported || snapshot.capabilities?.immersiveAR.available !== true}
-                onClick={() => void run("probing XR-assisted autofocus", openHybridCamera)}
-              >
-                Try XR-assisted autofocus
               </button>
             </>
           ) : null}
@@ -809,10 +740,6 @@ function PhotoCapturePanel({
   onStart,
   onCapture,
   onAutomaticChange,
-  hybrid,
-  hybridFallbackDistance,
-  onHybridFallbackDistanceChange,
-  xrSnapshot,
   onFinish,
   onClose,
 }: {
@@ -822,27 +749,21 @@ function PhotoCapturePanel({
   onStart: () => void;
   onCapture: () => void;
   onAutomaticChange: (enabled: boolean) => void;
-  hybrid: boolean;
-  hybridFallbackDistance: number;
-  onHybridFallbackDistanceChange: (meters: number) => void;
-  xrSnapshot: DiagnosticSnapshot;
   onFinish: () => void;
   onClose: () => void;
 }) {
   const capturing = snapshot.phase === "capturing";
   return (
     <section className="capture-panel photo-capture-panel" aria-label="Autofocus photo controls">
-      <p className="local-data-status">
-        LOCAL DEVICE ONLY · {hybrid ? "XR GUIDE ONLY · " : ""}UNPOSED PHOTOS · DOWNSTREAM SFM REQUIRED
-      </p>
+      <p className="local-data-status">LOCAL DEVICE ONLY · VISUAL GUIDE ONLY · UNPOSED PHOTOS · DOWNSTREAM SFM REQUIRED</p>
       <p className="build-id">
         Build <time dateTime={BUILD_TIMESTAMP}>{formatBuildTimestamp()}</time>
       </p>
       <div className="capture-status">
         <div><span>saved views</span><strong>{snapshot.photoCount}/{snapshot.target}</strong></div>
         <div>
-          <span>{hybrid ? "XR guide" : "camera"}</span>
-          <strong>{hybrid ? xrGuideLabel(xrSnapshot) : snapshot.liveQuality?.ready ? "ready" : snapshot.stage === "move" ? "moving" : snapshot.stage}</strong>
+          <span>visual guide</span>
+          <strong>{snapshot.guidance?.trackingState ?? "initializing"}</strong>
         </div>
         <div>
           <span>sharpness</span>
@@ -853,35 +774,14 @@ function PhotoCapturePanel({
         {snapshot.instruction}
       </p>
       {!snapshot.captureId ? (
-        <>
-          <p className="photo-mode-note">
-            {hybrid
-              ? `Experimental probe: XR ${xrSnapshot.xrFps} fps · autofocus stream ${snapshot.cameraStreamState} · focus ${snapshot.focusMode}. XR drives the globe only; photographs remain unposed.`
-              : "Up to three full-resolution photos are taken per stop; only the sharpest is retained. Coverage prompts are count-based because this mode intentionally records no camera pose."}
-          </p>
-          {hybrid && xrSnapshot.targetDistance === undefined ? (
-            <label className="hybrid-distance">
-              Object-centre distance
-              <select
-                value={hybridFallbackDistance}
-                onChange={(event) => onHybridFallbackDistanceChange(Number(event.currentTarget.value))}
-              >
-                <option value={0.2}>20 cm</option>
-                <option value={0.3}>30 cm</option>
-                <option value={0.45}>45 cm</option>
-                <option value={0.6}>60 cm</option>
-              </select>
-              <small>XR depth unavailable; estimate camera-to-centre distance before starting.</small>
-            </label>
-          ) : hybrid ? (
-            <p className="hybrid-depth">XR centre depth: {Math.round(xrSnapshot.targetDistance! * 100)} cm</p>
-          ) : null}
-        </>
-      ) : hybrid ? (
         <p className="photo-mode-note">
-          XR {xrSnapshot.xrFps} fps · tracking {xrSnapshot.trackingState} · autofocus stream {snapshot.cameraStreamState} · focus {snapshot.focusMode}
+          The autofocus preview supplies navigation-grade feature tracking. Device orientation stabilizes the coarse globe direction when available. Photographs remain unposed.
         </p>
-      ) : null}
+      ) : (
+        <p className="photo-mode-note">
+          Visual {snapshot.guidance?.matches ?? 0} matches · {formatPercent(snapshot.guidance?.confidence ?? 0)} confidence · orientation {snapshot.navigationOrientationAvailable ? "available" : "visual fallback"}
+        </p>
+      )}
       <div className="actions">
         {!snapshot.captureId ? (
           <button className="primary" disabled={Boolean(busy) || !storageAvailable} onClick={onStart}>
@@ -922,37 +822,6 @@ function photoStageLabel(snapshot: PhotoCaptureSnapshot): string {
   if (snapshot.stage === "settling") return "HOLD";
   if (snapshot.stage === "selecting" || snapshot.stage === "overlap" || snapshot.stage === "saving") return "CHECK";
   return snapshot.captureId ? "MOVE" : "CENTER";
-}
-
-function makePhotoGuidance(snapshot: DiagnosticSnapshot): PhotoCaptureGuidance | undefined {
-  const target = snapshot.guidanceTarget?.worldPoint;
-  if (!target || !snapshot.pose) return undefined;
-  const location = locateCoverageCell(snapshot.pose, target);
-  if (!location) return undefined;
-  return {
-    source: "webxr",
-    poseSynchronized: false,
-    azimuthBin: location.azimuthBin,
-    latitude: location.latitude,
-    elevation: location.elevation,
-    centered: snapshot.guidanceFraming?.centered ?? false,
-    trackingState: snapshot.trackingState,
-  };
-}
-
-function xrGuideLabel(snapshot: DiagnosticSnapshot): string {
-  if (!snapshot.running) return "ended";
-  if (!snapshot.guidanceTarget) return snapshot.trackingState === "tracked" ? "ready" : snapshot.trackingState;
-  if (snapshot.guidanceFraming && !snapshot.guidanceFraming.centered) return "off target";
-  return snapshot.trackingState;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function CapabilityGrid({ report }: { report?: CapabilityReport }) {
@@ -1077,6 +946,7 @@ function testReport(
     `XR tracking: ${snapshot.trackingState}; ${snapshot.xrFps} fps`,
     `Autofocus stream: ${photoSnapshot.cameraStreamState}; focus ${photoSnapshot.focusMode}`,
     `Autofocus guidance: ${photoSnapshot.guidanceMode}; ${photoSnapshot.photoCount} saved; ${photoSnapshot.rejectedCount} rejected`,
+    `Preview tracking: ${photoSnapshot.guidance?.trackingState ?? "inactive"}; ${photoSnapshot.guidance?.matches ?? 0} matches; ${formatPercent(photoSnapshot.guidance?.confidence ?? 0)} confidence; orientation ${photoSnapshot.navigationOrientationAvailable ? "available" : "visual fallback"}`,
     `Storage: ${storageKind}; ${formatBytes(storage.available)} free; protection ${storage.persisted === undefined ? "unknown" : storage.persisted ? "persistent" : "best effort"}`,
     `Screen wake lock: ${wakeLockState}`,
     `Capture ID: ${photoSnapshot.lastCaptureId ?? photoSnapshot.captureId ?? snapshot.lastCaptureId ?? snapshot.captureId ?? "none"}`,

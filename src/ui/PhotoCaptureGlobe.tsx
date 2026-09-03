@@ -8,7 +8,6 @@ import {
 import type {
   CaptureCoverageCell,
   CaptureReadinessReport,
-  Matrix4,
   PhotoCaptureGuidance,
 } from "../shared/types";
 import { CaptureGlobe, type GlobeOrientation } from "./CaptureGlobe";
@@ -16,20 +15,16 @@ import { CaptureGlobe, type GlobeOrientation } from "./CaptureGlobe";
 export function PhotoCaptureGlobe({
   photoCount,
   overlap,
-  trackedCells,
+  guidedCells,
   guidance,
-  guidancePose,
-  guidanceTarget,
 }: {
   photoCount: number;
   overlap?: PhotoOverlapMetrics;
-  trackedCells?: CaptureCoverageCell[];
+  guidedCells?: CaptureCoverageCell[];
   guidance?: PhotoCaptureGuidance;
-  guidancePose?: Matrix4;
-  guidanceTarget?: [number, number, number];
 }) {
   const manualCells = useMemo(() => buildPhotoCoverageCells(photoCount), [photoCount]);
-  const cells = trackedCells ?? manualCells;
+  const cells = guidedCells ?? manualCells;
   const current = currentPhotoCheckpoint(photoCount);
   const orientation = manualPhotoGlobeOrientation(current.azimuthBin, current.latitude);
   const completed = cells.filter((cell) => cell.state === "captured").length;
@@ -54,7 +49,6 @@ export function PhotoCaptureGlobe({
       coverageCheckpointsCompleted: completed,
       coverageCheckpointsRequired: PHOTO_CHECKPOINT_COUNT,
       currentCoverageCell: guidance ?? (photoCount >= PHOTO_CHECKPOINT_COUNT * 2 ? undefined : current),
-      targetEstimate: guidanceTarget,
       visualConnectedFrames: 0,
       visualComponentCount: 0,
       adjacentEdgeCoverage: 0,
@@ -68,9 +62,10 @@ export function PhotoCaptureGlobe({
     <div className="photo-capture-globe">
       <CaptureGlobe
         report={report}
-        pose={guidancePose}
-        orientationOverride={guidancePose && guidanceTarget ? undefined : orientation}
-        guidanceLabel={overlapLabel(overlap, Boolean(guidancePose && guidanceTarget))}
+        orientationOverride={guidance
+          ? { longitude: guidance.longitude, elevation: guidance.elevation }
+          : orientation}
+        guidanceLabel={overlapLabel(overlap, Boolean(guidance))}
       />
     </div>
   );
@@ -86,8 +81,8 @@ function manualPhotoGlobeOrientation(
   };
 }
 
-function overlapLabel(overlap: PhotoOverlapMetrics | undefined, xrGuided: boolean): string {
-  if (!overlap || overlap.verdict === "first") return xrGuided ? "XR guide · first anchor" : "manual guide · first anchor";
+function overlapLabel(overlap: PhotoOverlapMetrics | undefined, visuallyGuided: boolean): string {
+  if (!overlap || overlap.verdict === "first") return visuallyGuided ? "visual guide · first anchor" : "initializing visual guide";
   if (overlap.verdict === "useful") return `image overlap good · ${overlap.matches} matches`;
   if (overlap.verdict === "too-similar") return "move wider · view too similar";
   return "move less · overlap weak";
