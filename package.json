@@ -31,7 +31,7 @@
     "@types/webxr": "^0.5.22",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5",
+    "vite": "^6.4.5",
     "vite-node": "^3.2.4",
     "vitest": "^3.2.7"
   }
